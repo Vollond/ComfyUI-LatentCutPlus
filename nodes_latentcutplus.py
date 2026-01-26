@@ -7,20 +7,6 @@ import nodes
 _INT_MAX = 2_147_483_647
 
 
-def _normalize_index(idx: int, size: int) -> int:
-    if size <= 0:
-        return 0
-    if idx < 0:
-        idx = size + idx
-    return max(0, min(idx, size))
-
-
-def _slice_tensor_along_dim(x: torch.Tensor, dim: int, start: int, end: int) -> torch.Tensor:
-    sl = [slice(None)] * x.ndim
-    sl[dim] = slice(start, end)
-    return x[tuple(sl)]
-
-
 class LatentCutPlus(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -29,54 +15,57 @@ class LatentCutPlus(io.ComfyNode):
             display_name="Latent Cut Plus",
             search_aliases=["crop latent", "slice latent", "extract region", "latentcut plus"],
             category="latent/advanced",
-            description="Slice latents along x/y/t with Python-style indexing; supports amount=-1 (to end).",
+            description="Extended LatentCut with larger range and amount=-1 (to end) support.",
             inputs=[
                 io.Latent.Input("samples"),
                 io.Combo.Input("dim", options=["x", "y", "t"]),
                 io.Int.Input("index", default=0, min=-_INT_MAX, max=_INT_MAX, step=1),
-                io.Int.Input("amount", default=-1, min=-1, max=_INT_MAX, step=1),
+                io.Int.Input("amount", default=1, min=-1, max=_INT_MAX, step=1),
             ],
             outputs=[io.Latent.Output()],
         )
 
     @classmethod
     def execute(cls, samples, dim: str, index: int, amount: int) -> io.NodeOutput:
-        out = samples.copy()
-
-        if "samples" not in samples:
-            raise RuntimeError("LatentCutPlus: input LATENT has no 'samples' key")
-
-        x: torch.Tensor = samples["samples"]
-        if not isinstance(x, torch.Tensor):
-            raise RuntimeError("LatentCutPlus: samples['samples'] is not a torch.Tensor")
-
-        if dim == "x":
-            axis = x.ndim - 1
-        elif dim == "y":
-            axis = x.ndim - 2
+        samples_out = samples.copy()
+        s1 = samples["samples"]
+        
+        # Map dimension name to tensor axis (same as original)
+        if "x" in dim:
+            dim_axis = s1.ndim - 1
+        elif "y" in dim:
+            dim_axis = s1.ndim - 2
+        elif "t" in dim:
+            dim_axis = s1.ndim - 3
         else:
-            axis = x.ndim - 3
-
-        size = int(x.shape[axis])
-        start = _normalize_index(index, size)
-
-        if amount == -1:
-            end = size
+            dim_axis = s1.ndim - 1  # fallback
+        
+        # ✅ EXACT logic from original LatentCut
+        if index >= 0:
+            # Clamp index to valid range
+            index = min(index, s1.shape[dim_axis] - 1)
+            
+            # Special: amount=-1 means "to end"
+            if amount == -1:
+                amount = s1.shape[dim_axis] - index
+            else:
+                # Clamp amount so we don't exceed tensor size
+                amount = min(s1.shape[dim_axis] - index, amount)
         else:
-            amount = max(1, int(amount))
-            end = min(size, start + amount)
-
-        end = max(start, end)
-
-        out_tensor = _slice_tensor_along_dim(x, axis, start, end).contiguous()
-        out["samples"] = out_tensor
-
-        if "noise_mask" in out and isinstance(out["noise_mask"], torch.Tensor):
-            nm: torch.Tensor = out["noise_mask"]
-            if nm.ndim == x.ndim and int(nm.shape[axis]) == size:
-                out["noise_mask"] = _slice_tensor_along_dim(nm, axis, start, end).contiguous()
-
-        return io.NodeOutput(out)
+            # Negative index: clamp to valid negative range
+            index = max(index, -s1.shape[dim_axis])
+            
+            # Special: amount=-1 means "to end from negative index"
+            if amount == -1:
+                amount = -index
+            else:
+                # Original logic: amount limited by distance from start
+                amount = min(-index, amount)
+        
+        # Use torch.narrow (same as original)
+        samples_out["samples"] = torch.narrow(s1, dim_axis, index, amount)
+        
+        return io.NodeOutput(samples_out)
 
 
 class LatentCutPlusExtension(ComfyExtension):
