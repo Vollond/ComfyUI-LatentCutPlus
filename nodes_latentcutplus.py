@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import torch
-from comfyapi.latest import ComfyExtension, io
+from comfy_api.latest import ComfyExtension, io
 import nodes
 
-_INT_MAX = 2_147_483_647  # big enough for UI; runtime clamps to tensor size anyway
+_INT_MAX = 2_147_483_647
 
-class LatentCutPlusExtension(ComfyExtension):
-    async def get_node_list(self):
-        return [LatentCutPlus, LatentCutPlusAdvanced] 
+
 def _normalize_index(idx: int, size: int) -> int:
-    # Python-style: negative indices count from end.
     if size <= 0:
         return 0
     if idx < 0:
@@ -19,7 +16,6 @@ def _normalize_index(idx: int, size: int) -> int:
 
 
 def _slice_tensor_along_dim(x: torch.Tensor, dim: int, start: int, end: int) -> torch.Tensor:
-    # Build an index tuple like [:, :, start:end, :] etc.
     sl = [slice(None)] * x.ndim
     sl[dim] = slice(start, end)
     return x[tuple(sl)]
@@ -54,35 +50,27 @@ class LatentCutPlus(io.ComfyNode):
         if not isinstance(x, torch.Tensor):
             raise RuntimeError("LatentCutPlus: samples['samples'] is not a torch.Tensor")
 
-        # Map dim -> axis (follow the convention from your previous LatentCut: x=-1, y=-2, t=-3).
         if dim == "x":
             axis = x.ndim - 1
         elif dim == "y":
             axis = x.ndim - 2
-        else:  # "t"
+        else:
             axis = x.ndim - 3
 
         size = int(x.shape[axis])
-
-        # Normalize start like Python indexing.
         start = _normalize_index(index, size)
 
-        # amount semantics:
-        #  -1 => slice to end
-        #  >=1 => fixed length
         if amount == -1:
             end = size
         else:
             amount = max(1, int(amount))
             end = min(size, start + amount)
 
-        # Ensure non-empty slice (optional; but keep stable behavior)
         end = max(start, end)
 
         out_tensor = _slice_tensor_along_dim(x, axis, start, end).contiguous()
         out["samples"] = out_tensor
 
-        # If there is a noise mask with the same shape along that axis, slice it too.
         if "noise_mask" in out and isinstance(out["noise_mask"], torch.Tensor):
             nm: torch.Tensor = out["noise_mask"]
             if nm.ndim == x.ndim and int(nm.shape[axis]) == size:
