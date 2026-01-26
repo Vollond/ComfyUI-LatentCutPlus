@@ -4,6 +4,15 @@ import torch
 from comfy_api.latest import ComfyExtension, io
 import nodes
 import logging
+import comfy.model_management
+
+# Try to import AudioVAE, handle if not available
+try:
+    from comfy.ldm.lightricks.vae.audio_vae import AudioVAE
+    AUDIO_VAE_AVAILABLE = True
+except ImportError:
+    AUDIO_VAE_AVAILABLE = False
+    logging.warning("[LatentCutPlus] AudioVAE not available - LTXVEmptyLatentAudioDebug will be disabled")
 
 _INT_MAX = 2_147_483_647
 
@@ -103,6 +112,177 @@ class LatentCutPlus(io.ComfyNode):
         return io.NodeOutput(out)
 
 
+class LatentDebugInfo(io.ComfyNode):
+    """Debug node to inspect latent tensor information."""
+    
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LatentDebugInfo",
+            display_name="Latent Debug Info",
+            search_aliases=["debug latent", "inspect latent", "latent info"],
+            category="latent/advanced",
+            description="Display detailed information about latent tensor (shape, metadata, statistics).",
+            inputs=[
+                io.Latent.Input("samples"),
+            ],
+            outputs=[
+                io.Latent.Output(display_name="passthrough"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, samples) -> io.NodeOutput:
+        if "samples" not in samples:
+            logging.error("[LatentDebugInfo] No 'samples' key in latent dict")
+            return io.NodeOutput(samples)
+        
+        x: torch.Tensor = samples["samples"]
+        
+        # Log comprehensive info
+        logging.info("=" * 60)
+        logging.info("[LatentDebugInfo] LATENT TENSOR INFORMATION")
+        logging.info("=" * 60)
+        logging.info(f"Shape: {tuple(x.shape)}")
+        logging.info(f"Dtype: {x.dtype}")
+        logging.info(f"Device: {x.device}")
+        logging.info(f"Total elements: {x.numel()}")
+        logging.info(f"Memory (MB): {x.element_size() * x.numel() / 1024 / 1024:.2f}")
+        
+        # Statistics
+        logging.info(f"Min value: {x.min().item():.6f}")
+        logging.info(f"Max value: {x.max().item():.6f}")
+        logging.info(f"Mean value: {x.mean().item():.6f}")
+        logging.info(f"Std value: {x.std().item():.6f}")
+        
+        # Metadata
+        logging.info("Metadata keys in latent dict:")
+        for key, value in samples.items():
+            if key != "samples":
+                logging.info(f"  - {key}: {value}")
+        
+        logging.info("=" * 60)
+        
+        # Passthrough
+        return io.NodeOutput(samples)
+
+
+if AUDIO_VAE_AVAILABLE:
+    class LTXVEmptyLatentAudioDebug(io.ComfyNode):
+        """Debug version of LTXVEmptyLatentAudio with detailed logging."""
+        
+        @classmethod
+        def define_schema(cls):
+            return io.Schema(
+                node_id="LTXVEmptyLatentAudioDebug",
+                display_name="LTXV Empty Latent Audio (Debug)",
+                search_aliases=["audio latent", "empty audio", "ltxv audio debug"],
+                category="latent/audio",
+                description="Generate empty audio latents with diagnostic logging to track size issues.",
+                inputs=[
+                    io.Int.Input(
+                        "frames_number",
+                        default=97,
+                        min=1,
+                        max=10000,
+                        step=1,
+                        display_mode=io.NumberDisplay.number,
+                        tooltip="Number of frames.",
+                    ),
+                    io.Int.Input(
+                        "frame_rate",
+                        default=25,
+                        min=1,
+                        max=1000,
+                        step=1,
+                        display_mode=io.NumberDisplay.number,
+                        tooltip="Number of frames per second.",
+                    ),
+                    io.Int.Input(
+                        "batch_size",
+                        default=1,
+                        min=1,
+                        max=4096,
+                        display_mode=io.NumberDisplay.number,
+                        tooltip="The number of latent audio samples in the batch.",
+                    ),
+                    io.Vae.Input(
+                        id="audio_vae",
+                        display_name="Audio VAE",
+                        tooltip="The Audio VAE model to get configuration from.",
+                    ),
+                ],
+                outputs=[io.Latent.Output(display_name="Latent")],
+            )
+
+        @classmethod
+        def execute(
+            cls,
+            frames_number: int,
+            frame_rate: int,
+            batch_size: int,
+            audio_vae: AudioVAE,
+        ) -> io.NodeOutput:
+            """Generate empty audio latents with diagnostic logging."""
+            assert audio_vae is not None, "Audio VAE model is required"
+            
+            z_channels = audio_vae.latent_channels
+            audio_freq = audio_vae.latent_frequency_bins
+            sampling_rate = int(audio_vae.sample_rate)
+            
+            # Detailed logging
+            logging.info("=" * 80)
+            logging.info("[LTXVEmptyLatentAudioDebug] GENERATION START")
+            logging.info("=" * 80)
+            logging.info(f"INPUT PARAMETERS:")
+            logging.info(f"  frames_number = {frames_number}")
+            logging.info(f"  frame_rate = {frame_rate}")
+            logging.info(f"  batch_size = {batch_size}")
+            logging.info(f"AUDIO VAE CONFIG:")
+            logging.info(f"  latent_channels (z_channels) = {z_channels}")
+            logging.info(f"  latent_frequency_bins (audio_freq) = {audio_freq}")
+            logging.info(f"  sample_rate = {sampling_rate}")
+            
+            # Calculate audio latents count using AudioVAE method
+            logging.info(f"CALLING: audio_vae.num_of_latents_from_frames({frames_number}, {frame_rate})")
+            num_audio_latents = audio_vae.num_of_latents_from_frames(frames_number, frame_rate)
+            logging.info(f"RESULT: num_audio_latents = {num_audio_latents}")
+            
+            # Check if result makes sense
+            expected_approx = frames_number  # Rough estimate
+            if abs(num_audio_latents - expected_approx) > expected_approx * 0.5:
+                logging.warning(f"⚠️  SUSPICIOUS VALUE! Expected ~{expected_approx}, got {num_audio_latents}")
+                logging.warning(f"⚠️  Difference: {num_audio_latents - expected_approx} ({(num_audio_latents/expected_approx - 1)*100:.1f}% larger)")
+            
+            # Create tensor
+            audio_latents = torch.zeros(
+                (batch_size, z_channels, num_audio_latents, audio_freq),
+                device=comfy.model_management.intermediate_device(),
+            )
+            
+            logging.info(f"OUTPUT TENSOR:")
+            logging.info(f"  Shape: {tuple(audio_latents.shape)}")
+            logging.info(f"  Dtype: {audio_latents.dtype}")
+            logging.info(f"  Device: {audio_latents.device}")
+            logging.info(f"  Memory (MB): {audio_latents.element_size() * audio_latents.numel() / 1024 / 1024:.2f}")
+            logging.info("=" * 80)
+            
+            return io.NodeOutput(
+                {
+                    "samples": audio_latents,
+                    "sample_rate": sampling_rate,
+                    "type": "audio",
+                }
+            )
+
+
 class LatentCutPlusExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [LatentCutPlus]
+        nodes_list = [LatentCutPlus, LatentDebugInfo]
+        
+        # Add audio debug node only if AudioVAE is available
+        if AUDIO_VAE_AVAILABLE:
+            nodes_list.append(LTXVEmptyLatentAudioDebug)
+            logging.info("[LatentCutPlus] Registered LTXVEmptyLatentAudioDebug node")
+        
+        return nodes_list
