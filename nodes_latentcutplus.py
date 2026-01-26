@@ -125,6 +125,12 @@ class LatentDebugInfo(io.ComfyNode):
             description="Display detailed information about latent tensor (shape, metadata, statistics).",
             inputs=[
                 io.Latent.Input("samples"),
+                io.String.Input(
+                    "label",
+                    default="",
+                    multiline=False,
+                    tooltip="Custom label to identify this debug point in logs (e.g., 'after_concat', 'before_mask')",
+                ),
             ],
             outputs=[
                 io.Latent.Output(display_name="passthrough"),
@@ -132,36 +138,39 @@ class LatentDebugInfo(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, samples) -> io.NodeOutput:
+    def execute(cls, samples, label: str = "") -> io.NodeOutput:
         if "samples" not in samples:
-            logging.error("[LatentDebugInfo] No 'samples' key in latent dict")
+            logging.error(f"[LatentDebugInfo:{label or 'UNLABELED'}] No 'samples' key in latent dict")
             return io.NodeOutput(samples)
         
         x: torch.Tensor = samples["samples"]
         
+        # Create identifier for logs
+        log_id = f"[LatentDebugInfo:{label}]" if label else "[LatentDebugInfo]"
+        
         # Log comprehensive info
-        logging.info("=" * 60)
-        logging.info("[LatentDebugInfo] LATENT TENSOR INFORMATION")
-        logging.info("=" * 60)
-        logging.info(f"Shape: {tuple(x.shape)}")
-        logging.info(f"Dtype: {x.dtype}")
-        logging.info(f"Device: {x.device}")
-        logging.info(f"Total elements: {x.numel()}")
-        logging.info(f"Memory (MB): {x.element_size() * x.numel() / 1024 / 1024:.2f}")
+        logging.info("=" * 80)
+        logging.info(f"{log_id} LATENT TENSOR INFORMATION")
+        logging.info("=" * 80)
+        logging.info(f"{log_id} Shape: {tuple(x.shape)}")
+        logging.info(f"{log_id} Dtype: {x.dtype}")
+        logging.info(f"{log_id} Device: {x.device}")
+        logging.info(f"{log_id} Total elements: {x.numel()}")
+        logging.info(f"{log_id} Memory (MB): {x.element_size() * x.numel() / 1024 / 1024:.2f}")
         
         # Statistics
-        logging.info(f"Min value: {x.min().item():.6f}")
-        logging.info(f"Max value: {x.max().item():.6f}")
-        logging.info(f"Mean value: {x.mean().item():.6f}")
-        logging.info(f"Std value: {x.std().item():.6f}")
+        logging.info(f"{log_id} Min value: {x.min().item():.6f}")
+        logging.info(f"{log_id} Max value: {x.max().item():.6f}")
+        logging.info(f"{log_id} Mean value: {x.mean().item():.6f}")
+        logging.info(f"{log_id} Std value: {x.std().item():.6f}")
         
         # Metadata
-        logging.info("Metadata keys in latent dict:")
+        logging.info(f"{log_id} Metadata keys in latent dict:")
         for key, value in samples.items():
             if key != "samples":
-                logging.info(f"  - {key}: {value}")
+                logging.info(f"{log_id}   - {key}: {value}")
         
-        logging.info("=" * 60)
+        logging.info("=" * 80)
         
         # Passthrough
         return io.NodeOutput(samples)
