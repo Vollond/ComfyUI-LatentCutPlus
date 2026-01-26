@@ -57,10 +57,18 @@ class LatentCutPlus(io.ComfyNode):
             logging.info(f"[LatentCutPlus] Negative index {original_index} → normalized to {index}")
         
         start = max(0, index)
-        amount = max(1, int(amount))
-        end = start + amount
+        
+        # ✅ Smart amount handling: if amount >= remaining size, slice to end
+        remaining = size - start
+        if amount >= remaining:
+            end = size
+            actual_amount = remaining
+            logging.info(f"[LatentCutPlus] Amount {amount} >= remaining {remaining}, slicing to end")
+        else:
+            actual_amount = max(1, int(amount))
+            end = start + actual_amount
 
-        logging.info(f"[LatentCutPlus] Slice: [{start}:{end}] (length={end-start})")
+        logging.info(f"[LatentCutPlus] Slice: [{start}:{end}] (actual length={actual_amount})")
 
         # Build slice tuple
         sl = [slice(None)] * x.ndim
