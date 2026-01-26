@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import torch
 from comfy_api.latest import ComfyExtension, io
-import nodes
 import logging
 import comfy.model_management
 
@@ -55,10 +54,10 @@ class LatentCutPlus(io.ComfyNode):
             axis = x.ndim - 3
 
         size = int(x.shape[axis])
-        
+
         logging.info(f"[LatentCutPlus] Input shape: {tuple(x.shape)}, dim={dim} (axis={axis}), size={size}")
         logging.info(f"[LatentCutPlus] Raw params: index={index}, amount={amount}")
-        
+
         # Protection from overflow: clamp index to valid range
         original_index = index
         if index < 0:
@@ -71,9 +70,9 @@ class LatentCutPlus(io.ComfyNode):
             if index >= size:
                 logging.warning(f"[LatentCutPlus] Index {index} >= size {size}, clamping to {size-1}")
                 index = max(0, size - 1)
-        
+
         start = index
-        
+
         # Protection: check remaining size
         remaining = size - start
         if remaining <= 0:
@@ -81,7 +80,7 @@ class LatentCutPlus(io.ComfyNode):
             # Return empty slice
             out["samples"] = x[:, :, 0:0] if axis == 2 else x
             return io.NodeOutput(out)
-        
+
         # Smart amount handling: if amount >= remaining, slice to end
         if amount >= remaining:
             end = size
@@ -96,10 +95,10 @@ class LatentCutPlus(io.ComfyNode):
         # Build slice tuple
         sl = [slice(None)] * x.ndim
         sl[axis] = slice(start, end)
-        
+
         out_tensor = x[tuple(sl)].contiguous()
         out["samples"] = out_tensor
-        
+
         logging.info(f"[LatentCutPlus] Output shape: {tuple(out_tensor.shape)}")
 
         # Handle noise_mask if present
@@ -114,7 +113,7 @@ class LatentCutPlus(io.ComfyNode):
 
 class LatentDebugInfo(io.ComfyNode):
     """Debug node to inspect latent tensor information."""
-    
+
     @classmethod
     def define_schema(cls):
         return io.Schema(
@@ -142,12 +141,12 @@ class LatentDebugInfo(io.ComfyNode):
         if "samples" not in samples:
             logging.error(f"[LatentDebugInfo:{label or 'UNLABELED'}] No 'samples' key in latent dict")
             return io.NodeOutput(samples)
-        
+
         x: torch.Tensor = samples["samples"]
-        
+
         # Create identifier for logs
         log_id = f"[LatentDebugInfo:{label}]" if label else "[LatentDebugInfo]"
-        
+
         # Log comprehensive info
         logging.info("=" * 80)
         logging.info(f"{log_id} LATENT TENSOR INFORMATION")
@@ -157,52 +156,112 @@ class LatentDebugInfo(io.ComfyNode):
         logging.info(f"{log_id} Device: {x.device}")
         logging.info(f"{log_id} Total elements: {x.numel()}")
         logging.info(f"{log_id} Memory (MB): {x.element_size() * x.numel() / 1024 / 1024:.2f}")
-        
+
         # Statistics
-        logging.info(f"{log_id} Min value: {x.min().item():.6f}")
-        logging.info(f"{log_id} Max value: {x.max().item():.6f}")
-        logging.info(f"{log_id} Mean value: {x.mean().item():.6f}")
-        logging.info(f"{log_id} Std value: {x.std().item():.6f}")
-        
+        try:
+            logging.info(f"{log_id} Min value: {x.min().item():.6f}")
+            logging.info(f"{log_id} Max value: {x.max().item():.6f}")
+            logging.info(f"{log_id} Mean value: {x.mean().item():.6f}")
+            logging.info(f"{log_id} Std value: {x.std().item():.6f}")
+        except Exception as e:
+            logging.warning(f"{log_id} Failed to compute stats: {e}")
+
         # Metadata
         logging.info(f"{log_id} Metadata keys in latent dict:")
         for key, value in samples.items():
             if key != "samples":
                 logging.info(f"{log_id}   - {key}: {value}")
-        
+
         logging.info("=" * 80)
-        
+
         # Passthrough
         return io.NodeOutput(samples)
 
 
-class DebugAny:
-    """Universal debug node that accepts any input type and logs it as string (Old API)."""
-    
+class DebugAny(io.ComfyNode):
+    """Universal debug node using new API with multiple optional typed inputs."""
+
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "value": ("*",),  # Wildcard type
-                "label": ("STRING", {"default": "", "multiline": False}),
-            }
+    def define_schema(cls):
+        return io.Schema(
+            node_id="DebugAny",
+            display_name="Debug Any",
+            search_aliases=["debug", "inspect", "log", "print", "debug any"],
+            category="utils",
+            description="Universal debug: connect ONE of the inputs, add label, logs value and passes it through unchanged.",
+            inputs=[
+                io.Latent.Input("latent", optional=True),
+                io.Int.Input("int_value", optional=True),
+                io.Float.Input("float_value", optional=True),
+                io.String.Input("string_value", optional=True, multiline=True),
+                io.Model.Input("model", optional=True),
+                io.Vae.Input("vae", optional=True),
+                io.Conditioning.Input("conditioning", optional=True),
+                io.Image.Input("image", optional=True),
+                io.String.Input(
+                    "label",
+                    default="",
+                    multiline=False,
+                    tooltip="Custom label for these logs",
+                ),
+            ],
+            outputs=[
+                io.Latent.Output("latent_out", optional=True),
+                io.Int.Output("int_out", optional=True),
+                io.Float.Output("float_out", optional=True),
+                io.String.Output("string_out", optional=True),
+                io.Model.Output("model_out", optional=True),
+                io.Vae.Output("vae_out", optional=True),
+                io.Conditioning.Output("conditioning_out", optional=True),
+                io.Image.Output("image_out", optional=True),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        label: str = "",
+        latent=None,
+        int_value=None,
+        float_value=None,
+        string_value=None,
+        model=None,
+        vae=None,
+        conditioning=None,
+        image=None,
+    ) -> io.NodeOutput:
+        inputs = {
+            "latent": latent,
+            "int": int_value,
+            "float": float_value,
+            "string": string_value,
+            "model": model,
+            "vae": vae,
+            "conditioning": conditioning,
+            "image": image,
         }
-    
-    RETURN_TYPES = ("*",)
-    RETURN_NAMES = ("passthrough",)
-    FUNCTION = "execute"
-    CATEGORY = "utils"
-    
-    def execute(self, value, label: str = ""):
-        # Create identifier for logs
+
+        value = None
+        value_type = None
+        for name, val in inputs.items():
+            if val is not None:
+                value = val
+                value_type = name
+                break
+
         log_id = f"[DebugAny:{label}]" if label else "[DebugAny]"
-        
-        # Convert value to string representation
+
+        if value is None:
+            logging.warning(f"{log_id} No input connected!")
+            return io.NodeOutput({})
+
         try:
-            # Handle different types
             if isinstance(value, torch.Tensor):
                 value_str = f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, device={value.device})"
-                value_details = f"min={value.min().item():.4f}, max={value.max().item():.4f}, mean={value.mean().item():.4f}"
+                try:
+                    value_details = f"min={value.min().item():.4f}, max={value.max().item():.4f}, mean={value.mean().item():.4f}"
+                except Exception:
+                    value_details = ""
             elif isinstance(value, dict):
                 value_str = f"Dict with keys: {list(value.keys())}"
                 value_details = ""
@@ -211,9 +270,6 @@ class DebugAny:
                         value_details += f"\n{log_id}   {k}: Tensor{tuple(v.shape)}"
                     else:
                         value_details += f"\n{log_id}   {k}: {type(v).__name__} = {str(v)[:100]}"
-            elif isinstance(value, (list, tuple)):
-                value_str = f"{type(value).__name__}(length={len(value)})"
-                value_details = f"First 3 items: {str(value[:3])[:200]}"
             elif isinstance(value, (int, float, str, bool)):
                 value_str = f"{type(value).__name__} = {value}"
                 value_details = ""
@@ -221,27 +277,44 @@ class DebugAny:
                 value_str = f"{type(value).__name__}"
                 value_details = f"repr: {repr(value)[:300]}"
         except Exception as e:
-            value_str = f"<Error converting to string: {e}>"
+            value_str = f"<Error formatting value: {e}>"
             value_details = ""
-        
-        # Log the value
+
         logging.info("=" * 80)
         logging.info(f"{log_id} VALUE DEBUG")
         logging.info("=" * 80)
-        logging.info(f"{log_id} Type: {type(value).__name__}")
+        logging.info(f"{log_id} Input slot: {value_type}")
+        logging.info(f"{log_id} Python type: {type(value).__name__}")
         logging.info(f"{log_id} Value: {value_str}")
         if value_details:
             logging.info(f"{log_id} Details: {value_details}")
         logging.info("=" * 80)
-        
-        # Passthrough unchanged
-        return (value,)
+
+        result = {}
+        if latent is not None:
+            result["latent_out"] = latent
+        if int_value is not None:
+            result["int_out"] = int_value
+        if float_value is not None:
+            result["float_out"] = float_value
+        if string_value is not None:
+            result["string_out"] = string_value
+        if model is not None:
+            result["model_out"] = model
+        if vae is not None:
+            result["vae_out"] = vae
+        if conditioning is not None:
+            result["conditioning_out"] = conditioning
+        if image is not None:
+            result["image_out"] = image
+
+        return io.NodeOutput(result)
 
 
 if AUDIO_VAE_AVAILABLE:
     class LTXVEmptyLatentAudioDebug(io.ComfyNode):
         """Debug version of LTXVEmptyLatentAudio with detailed logging."""
-        
+
         @classmethod
         def define_schema(cls):
             return io.Schema(
@@ -296,12 +369,11 @@ if AUDIO_VAE_AVAILABLE:
         ) -> io.NodeOutput:
             """Generate empty audio latents with diagnostic logging."""
             assert audio_vae is not None, "Audio VAE model is required"
-            
+
             z_channels = audio_vae.latent_channels
             audio_freq = audio_vae.latent_frequency_bins
             sampling_rate = int(audio_vae.sample_rate)
-            
-            # Detailed logging
+
             logging.info("=" * 80)
             logging.info("[LTXVEmptyLatentAudioDebug] GENERATION START")
             logging.info("=" * 80)
@@ -313,31 +385,32 @@ if AUDIO_VAE_AVAILABLE:
             logging.info(f"  latent_channels (z_channels) = {z_channels}")
             logging.info(f"  latent_frequency_bins (audio_freq) = {audio_freq}")
             logging.info(f"  sample_rate = {sampling_rate}")
-            
-            # Calculate audio latents count using AudioVAE method
+
             logging.info(f"CALLING: audio_vae.num_of_latents_from_frames({frames_number}, {frame_rate})")
             num_audio_latents = audio_vae.num_of_latents_from_frames(frames_number, frame_rate)
             logging.info(f"RESULT: num_audio_latents = {num_audio_latents}")
-            
-            # Check if result makes sense
-            expected_approx = frames_number  # Rough estimate
-            if abs(num_audio_latents - expected_approx) > expected_approx * 0.5:
-                logging.warning(f"⚠️  SUSPICIOUS VALUE! Expected ~{expected_approx}, got {num_audio_latents}")
-                logging.warning(f"⚠️  Difference: {num_audio_latents - expected_approx} ({(num_audio_latents/expected_approx - 1)*100:.1f}% larger)")
-            
-            # Create tensor
+
+            expected_approx = frames_number
+            try:
+                if abs(num_audio_latents - expected_approx) > expected_approx * 0.5:
+                    logging.warning(
+                        f"⚠️  SUSPICIOUS VALUE! Expected ~{expected_approx}, got {num_audio_latents}"
+                    )
+            except Exception:
+                pass
+
             audio_latents = torch.zeros(
                 (batch_size, z_channels, num_audio_latents, audio_freq),
                 device=comfy.model_management.intermediate_device(),
             )
-            
+
             logging.info(f"OUTPUT TENSOR:")
             logging.info(f"  Shape: {tuple(audio_latents.shape)}")
             logging.info(f"  Dtype: {audio_latents.dtype}")
             logging.info(f"  Device: {audio_latents.device}")
             logging.info(f"  Memory (MB): {audio_latents.element_size() * audio_latents.numel() / 1024 / 1024:.2f}")
             logging.info("=" * 80)
-            
+
             return io.NodeOutput(
                 {
                     "samples": audio_latents,
@@ -345,161 +418,18 @@ if AUDIO_VAE_AVAILABLE:
                     "type": "audio",
                 }
             )
-class DebugAnyNew(io.ComfyNode):
-    """Universal debug node using new API with multiple optional inputs."""
-    
-    @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="DebugAnyNew",
-            display_name="Debug Any",
-            search_aliases=["debug", "inspect", "log", "print", "debug any"],
-            category="utils",
-            description="Universal debug: connect ANY type to 'value' input, adds label, logs and passes through.",
-            inputs=[
-                # Multiple optional inputs for different types
-                io.Latent.Input("latent", optional=True),
-                io.Int.Input("int_value", optional=True),
-                io.Float.Input("float_value", optional=True),
-                io.String.Input("string_value", optional=True, multiline=True),
-                io.Model.Input("model", optional=True),
-                io.Vae.Input("vae", optional=True),
-                io.Conditioning.Input("conditioning", optional=True),
-                io.Image.Input("image", optional=True),
-                # Label for context
-                io.String.Input(
-                    "label",
-                    default="",
-                    multiline=False,
-                    tooltip="Custom label to identify this value in logs",
-                ),
-            ],
-            outputs=[
-                io.Latent.Output("latent_out", optional=True),
-                io.Int.Output("int_out", optional=True),
-                io.Float.Output("float_out", optional=True),
-                io.String.Output("string_out", optional=True),
-                io.Model.Output("model_out", optional=True),
-                io.Vae.Output("vae_out", optional=True),
-                io.Conditioning.Output("conditioning_out", optional=True),
-                io.Image.Output("image_out", optional=True),
-            ],
-        )
-
-    @classmethod
-    def execute(
-        cls,
-        label: str = "",
-        latent=None,
-        int_value=None,
-        float_value=None,
-        string_value=None,
-        model=None,
-        vae=None,
-        conditioning=None,
-        image=None,
-    ) -> io.NodeOutput:
-        # Find which input was provided
-        inputs = {
-            "latent": latent,
-            "int": int_value,
-            "float": float_value,
-            "string": string_value,
-            "model": model,
-            "vae": vae,
-            "conditioning": conditioning,
-            "image": image,
-        }
-        
-        # Get the first non-None input
-        value = None
-        value_type = None
-        for name, val in inputs.items():
-            if val is not None:
-                value = val
-                value_type = name
-                break
-        
-        if value is None:
-            logging.warning(f"[DebugAny:{label}] No input connected!")
-            return io.NodeOutput({})
-        
-        # Create log identifier
-        log_id = f"[DebugAny:{label}]" if label else "[DebugAny]"
-        
-        # Log based on type
-        try:
-            if isinstance(value, torch.Tensor):
-                value_str = f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, device={value.device})"
-                value_details = f"min={value.min().item():.4f}, max={value.max().item():.4f}, mean={value.mean().item():.4f}"
-            elif isinstance(value, dict):
-                value_str = f"Dict with keys: {list(value.keys())}"
-                value_details = ""
-                for k, v in value.items():
-                    if isinstance(v, torch.Tensor):
-                        value_details += f"\n{log_id}   {k}: Tensor{tuple(v.shape)}"
-                    else:
-                        value_details += f"\n{log_id}   {k}: {type(v).__name__} = {str(v)[:100]}"
-            elif isinstance(value, (int, float, str, bool)):
-                value_str = f"{type(value).__name__} = {value}"
-                value_details = ""
-            else:
-                value_str = f"{type(value).__name__}"
-                value_details = f"repr: {repr(value)[:300]}"
-        except Exception as e:
-            value_str = f"<Error: {e}>"
-            value_details = ""
-        
-        # Log it
-        logging.info("=" * 80)
-        logging.info(f"{log_id} VALUE DEBUG")
-        logging.info("=" * 80)
-        logging.info(f"{log_id} Input type: {value_type}")
-        logging.info(f"{log_id} Python type: {type(value).__name__}")
-        logging.info(f"{log_id} Value: {value_str}")
-        if value_details:
-            logging.info(f"{log_id} Details: {value_details}")
-        logging.info("=" * 80)
-        
-        # Return on correct output
-        result = {}
-        if latent is not None:
-            result["latent_out"] = latent
-        if int_value is not None:
-            result["int_out"] = int_value
-        if float_value is not None:
-            result["float_out"] = float_value
-        if string_value is not None:
-            result["string_out"] = string_value
-        if model is not None:
-            result["model_out"] = model
-        if vae is not None:
-            result["vae_out"] = vae
-        if conditioning is not None:
-            result["conditioning_out"] = conditioning
-        if image is not None:
-            result["image_out"] = image
-        
-        return io.NodeOutput(result)
-
-
-# Register old API nodes separately
-NODE_CLASS_MAPPINGS = {
-    "DebugAny": DebugAny,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "DebugAny": "Debug Any (Universal)",
-}
 
 
 class LatentCutPlusExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        nodes_list = [LatentCutPlus, LatentDebugInfo, DebugAnyNew]  # ← Додав DebugAnyNew
-        
+        nodes_list: list[type[io.ComfyNode]] = [
+            LatentCutPlus,
+            LatentDebugInfo,
+            DebugAny,
+        ]
+
         if AUDIO_VAE_AVAILABLE:
             nodes_list.append(LTXVEmptyLatentAudioDebug)
             logging.info("[LatentCutPlus] Registered LTXVEmptyLatentAudioDebug node")
-        
-        return nodes_list
 
+        return nodes_list
