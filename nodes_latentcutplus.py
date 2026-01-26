@@ -119,7 +119,6 @@ class LatentCutPlus:
 # ============================================================================
 # LTXV EMPTY LATENT AUDIO DEBUG (old API)
 # ============================================================================
-
 class LTXVEmptyLatentAudioDebug:
     """Debug node for LTXV empty latent with detailed logging."""
     
@@ -131,6 +130,9 @@ class LTXVEmptyLatentAudioDebug:
                 "height": ("INT", {"default": 512, "min": 16, "max": 8192, "step": 16}),
                 "length": ("INT", {"default": 97, "min": 1, "max": 1024}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            },
+            "optional": {
+                "audio_vae": ("VAE",),
             }
         }
     
@@ -139,10 +141,12 @@ class LTXVEmptyLatentAudioDebug:
     FUNCTION = "execute"
     CATEGORY = "latent/audio"
     
-    def execute(self, width: int, height: int, length: int, batch_size: int):
+    def execute(self, width: int, height: int, length: int, batch_size: int, audio_vae=None):
         logging.info("=" * 80)
         logging.info("[LTXVEmptyLatentAudioDebug] Creating empty latent")
         logging.info(f"[LTXVEmptyLatentAudioDebug] width={width}, height={height}, length={length}, batch_size={batch_size}")
+        if audio_vae is not None:
+            logging.info(f"[LTXVEmptyLatentAudioDebug] audio_vae provided: {type(audio_vae).__name__}")
 
         # LTXV latent dimensions: (batch, channels, frames, height/8, width/8)
         latent_t = length
