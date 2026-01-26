@@ -163,6 +163,74 @@ class LTXVEmptyLatentAudioDebug:
 
 
 # ============================================================================
+# LATENT DEBUG INFO (old API)
+# ============================================================================
+
+class LatentDebugInfo:
+    """Debug node for inspecting latent tensor with detailed statistics."""
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "samples": ("LATENT",),
+                "label": ("STRING", {"default": "", "multiline": False}),
+            }
+        }
+    
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("passthrough",)
+    FUNCTION = "execute"
+    CATEGORY = "latent"
+    OUTPUT_NODE = False
+    
+    def execute(self, samples, label: str = ""):
+        log_id = f"[LatentDebugInfo:{label}]" if label else "[LatentDebugInfo]"
+        
+        if "samples" not in samples:
+            logging.warning(f"{log_id} No 'samples' key in latent dict!")
+            return (samples,)
+        
+        x = samples["samples"]
+        
+        if not isinstance(x, torch.Tensor):
+            logging.warning(f"{log_id} samples['samples'] is not a tensor!")
+            return (samples,)
+        
+        logging.info("=" * 80)
+        logging.info(f"{log_id} LATENT TENSOR INFORMATION")
+        logging.info("=" * 80)
+        logging.info(f"{log_id} Shape: {tuple(x.shape)}")
+        logging.info(f"{log_id} Dtype: {x.dtype}")
+        logging.info(f"{log_id} Device: {x.device}")
+        logging.info(f"{log_id} Total elements: {x.numel()}")
+        logging.info(f"{log_id} Memory (MB): {x.element_size() * x.numel() / 1024 / 1024:.2f}")
+        
+        try:
+            logging.info(f"{log_id} Min value: {x.min().item():.6f}")
+            logging.info(f"{log_id} Max value: {x.max().item():.6f}")
+            logging.info(f"{log_id} Mean value: {x.mean().item():.6f}")
+            logging.info(f"{log_id} Std value: {x.std().item():.6f}")
+        except Exception as e:
+            logging.warning(f"{log_id} Could not compute statistics: {e}")
+        
+        # Log metadata keys
+        logging.info(f"{log_id} Metadata keys in latent dict:")
+        for key in samples.keys():
+            if key != "samples":
+                value = samples[key]
+                if isinstance(value, torch.Tensor):
+                    logging.info(f"{log_id}   - {key}: Tensor{tuple(value.shape)}")
+                else:
+                    value_str = str(value)[:100]
+                    logging.info(f"{log_id}   - {key}: {value_str}")
+        
+        logging.info("=" * 80)
+        
+        return (samples,)
+
+
+# ============================================================================
 # DEBUG ANY (old API)
 # ============================================================================
 
@@ -243,11 +311,13 @@ class DebugAny:
 NODE_CLASS_MAPPINGS = {
     "LatentCutPlus": LatentCutPlus,
     "LTXVEmptyLatentAudioDebug": LTXVEmptyLatentAudioDebug,
+    "LatentDebugInfo": LatentDebugInfo,
     "DebugAny": DebugAny,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LatentCutPlus": "✂️ Latent Cut Plus",
     "LTXVEmptyLatentAudioDebug": "🔊 LTXV Empty Latent Audio (Debug)",
+    "LatentDebugInfo": "📊 Latent Debug Info",
     "DebugAny": "🔍 Debug Any",
 }
