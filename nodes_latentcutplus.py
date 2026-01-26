@@ -177,85 +177,47 @@ class LatentDebugInfo(io.ComfyNode):
         # Passthrough
         return io.NodeOutput(samples)
 
-class DebugAny(io.ComfyNode):
-    """Universal debug node using new API with multiple optional typed inputs."""
+# ... (existing LatentCutPlus code above) ...
 
-    @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="DebugAny",
-            display_name="Debug Any",
-            search_aliases=["debug", "inspect", "log", "print", "debug any"],
-            category="utils",
-            description="Universal debug: connect ONE of the inputs, add label, logs value and passes it through unchanged.",
-            inputs=[
-                io.Latent.Input("latent", optional=True),
-                io.Int.Input("int_value", optional=True),
-                io.Float.Input("float_value", optional=True),
-                io.String.Input("string_value", optional=True, multiline=True),
-                io.Model.Input("model", optional=True),
-                io.Vae.Input("vae", optional=True),
-                io.Conditioning.Input("conditioning", optional=True),
-                io.Image.Input("image", optional=True),
-                io.String.Input(
-                    "label",
-                    default="",
-                    multiline=False,
-                    tooltip="Custom label for these logs",
-                ),
-            ],
-            outputs=[
-                # Separate outputs for each type (no optional keyword)
-                io.Latent.Output("latent_out"),
-                io.Int.Output("int_out"),
-                io.Float.Output("float_out"),
-                io.String.Output("string_out"),
-                io.Model.Output("model_out"),
-                io.Vae.Output("vae_out"),
-                io.Conditioning.Output("conditioning_out"),
-                io.Image.Output("image_out"),
-            ],
-        )
+# AnyType class for universal debug node
+class AnyType(str):
+    """Special class for representing any type - always returns True on type comparison"""
+    def __eq__(self, _) -> bool:
+        return True
 
+    def __ne__(self, __value: object) -> bool:
+        return False
+
+any_type = AnyType("*")
+
+
+class DebugAny:
+    """Universal debug node that accepts ANY type using AnyType class."""
+    
     @classmethod
-    def execute(
-        cls,
-        label: str = "",
-        latent=None,
-        int_value=None,
-        float_value=None,
-        string_value=None,
-        model=None,
-        vae=None,
-        conditioning=None,
-        image=None,
-    ) -> io.NodeOutput:
-        inputs = {
-            "latent": latent,
-            "int": int_value,
-            "float": float_value,
-            "string": string_value,
-            "model": model,
-            "vae": vae,
-            "conditioning": conditioning,
-            "image": image,
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "label": ("STRING", {"default": "", "multiline": False}),
+            },
+            "optional": {
+                "value": (any_type, {}),
+            },
         }
-
-        value = None
-        value_type = None
-        for name, val in inputs.items():
-            if val is not None:
-                value = val
-                value_type = name
-                break
-
+    
+    RETURN_TYPES = (any_type,)
+    RETURN_NAMES = ("passthrough",)
+    FUNCTION = "execute"
+    CATEGORY = "utils"
+    OUTPUT_NODE = False
+    
+    def execute(self, label: str = "", value=None):
         log_id = f"[DebugAny:{label}]" if label else "[DebugAny]"
-
+        
         if value is None:
-            logging.warning(f"{log_id} No input connected!")
-            # Return empty dict - outputs will be None
-            return io.NodeOutput({})
-
+            logging.warning(f"{log_id} No value connected!")
+            return (None,)
+        
         try:
             if isinstance(value, torch.Tensor):
                 value_str = f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, device={value.device})"
@@ -271,46 +233,41 @@ class DebugAny(io.ComfyNode):
                         value_details += f"\n{log_id}   {k}: Tensor{tuple(v.shape)}"
                     else:
                         value_details += f"\n{log_id}   {k}: {type(v).__name__} = {str(v)[:100]}"
+            elif isinstance(value, (list, tuple)):
+                value_str = f"{type(value).__name__}(length={len(value)})"
+                value_details = f"First 3 items: {str(value[:3])[:200]}"
             elif isinstance(value, (int, float, str, bool)):
                 value_str = f"{type(value).__name__} = {value}"
                 value_details = ""
             else:
                 value_str = f"{type(value).__name__}"
-                value_details = f"repr: {repr(value)[:300]}"
+                try:
+                    value_details = f"repr: {repr(value)[:300]}"
+                except Exception:
+                    value_details = "<cannot repr>"
         except Exception as e:
-            value_str = f"<Error formatting value: {e}>"
+            value_str = f"<Error: {e}>"
             value_details = ""
-
+        
         logging.info("=" * 80)
         logging.info(f"{log_id} VALUE DEBUG")
         logging.info("=" * 80)
-        logging.info(f"{log_id} Input slot: {value_type}")
         logging.info(f"{log_id} Python type: {type(value).__name__}")
         logging.info(f"{log_id} Value: {value_str}")
         if value_details:
             logging.info(f"{log_id} Details: {value_details}")
         logging.info("=" * 80)
+        
+        return (value,)
 
-        # Return only the connected input on its corresponding output
-        result = {}
-        if latent is not None:
-            result["latent_out"] = latent
-        if int_value is not None:
-            result["int_out"] = int_value
-        if float_value is not None:
-            result["float_out"] = float_value
-        if string_value is not None:
-            result["string_out"] = string_value
-        if model is not None:
-            result["model_out"] = model
-        if vae is not None:
-            result["vae_out"] = vae
-        if conditioning is not None:
-            result["conditioning_out"] = conditioning
-        if image is not None:
-            result["image_out"] = image
 
-        return io.NodeOutput(result)
+# Export for old API registration
+NODE_CLASS_MAPPINGS = {
+    "DebugAny": DebugAny,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS
+
 
 
 
