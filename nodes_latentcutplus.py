@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import torch
-from comfy_api.latest import ComfyExtension, io
-
+from comfyapi.latest import ComfyExtension, io
+import nodes
 
 _INT_MAX = 2_147_483_647  # big enough for UI; runtime clamps to tensor size anyway
 
-
+class LatentCutPlusExtension(ComfyExtension):
+    async def get_node_list(self):
+        return [LatentCutPlus, LatentCutPlusAdvanced] 
 def _normalize_index(idx: int, size: int) -> int:
     # Python-style: negative indices count from end.
     if size <= 0:
