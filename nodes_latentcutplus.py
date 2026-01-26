@@ -1,48 +1,46 @@
 import logging
 import torch
-from comfy_api.latest import ComfyExtension, io
 
 
-class LatentCutPlus(io.ComfyNode):
+# ============================================================================
+# ANYTYPE CLASS (for universal debug node)
+# ============================================================================
+
+class AnyType(str):
+    """Special class for representing any type - always returns True on type comparison"""
+    def __eq__(self, _) -> bool:
+        return True
+
+    def __ne__(self, __value: object) -> bool:
+        return False
+
+any_type = AnyType("*")
+
+
+# ============================================================================
+# LATENT CUT PLUS (old API)
+# ============================================================================
+
+class LatentCutPlus:
     """Slice latent tensor along a dimension (t/x/y) with smart index/amount handling."""
-
+    
     @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="LatentCutPlus",
-            display_name="Latent Cut Plus",
-            category="latent",
-            description="Slice latent tensor along t/x/y dimension with overflow protection",
-            inputs=[
-                io.Latent.Input("samples"),
-                io.Enum.Input(
-                    "dim",
-                    choices=["t", "x", "y"],
-                    default="t",
-                    tooltip="Dimension to slice: t=temporal, x=width, y=height",
-                ),
-                io.Int.Input(
-                    "index",
-                    default=0,
-                    min=-2147483647,
-                    max=2147483647,
-                    tooltip="Start index (supports negative indexing)",
-                ),
-                io.Int.Input(
-                    "amount",
-                    default=1,
-                    min=1,
-                    max=2147483647,
-                    tooltip="Number of frames/slices to keep (or use large value to slice to end)",
-                ),
-            ],
-            outputs=[
-                io.Latent.Output("result"),
-            ],
-        )
-
-    @classmethod
-    def execute(cls, samples, dim: str, index: int, amount: int) -> io.NodeOutput:
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "samples": ("LATENT",),
+                "dim": (["t", "x", "y"], {"default": "t"}),
+                "index": ("INT", {"default": 0, "min": -2147483647, "max": 2147483647}),
+                "amount": ("INT", {"default": 1, "min": 1, "max": 2147483647}),
+            }
+        }
+    
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("result",)
+    FUNCTION = "execute"
+    CATEGORY = "latent"
+    
+    def execute(self, samples, dim: str, index: int, amount: int):
         out = samples.copy()
 
         if "samples" not in samples:
@@ -86,7 +84,7 @@ class LatentCutPlus(io.ComfyNode):
             logging.error(f"[LatentCutPlus] No data to slice! start={start}, size={size}")
             # Return empty slice
             out["samples"] = x[:, :, 0:0] if axis == 2 else x
-            return io.NodeOutput(out)
+            return (out,)
 
         # Smart amount handling: if amount >= remaining, slice to end
         if amount >= remaining:
@@ -115,32 +113,33 @@ class LatentCutPlus(io.ComfyNode):
                 out["noise_mask"] = nm[tuple(sl)].contiguous()
                 logging.info(f"[LatentCutPlus] Noise mask sliced: {tuple(out['noise_mask'].shape)}")
 
-        return io.NodeOutput(out)
+        return (out,)
 
 
-class LTXVEmptyLatentAudioDebug(io.ComfyNode):
+# ============================================================================
+# LTXV EMPTY LATENT AUDIO DEBUG (old API)
+# ============================================================================
+
+class LTXVEmptyLatentAudioDebug:
     """Debug node for LTXV empty latent with detailed logging."""
-
+    
     @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="LTXVEmptyLatentAudioDebug",
-            display_name="LTXV Empty Latent Audio (Debug)",
-            category="latent/audio",
-            description="Create empty latent for LTXV with audio dimensions and detailed logging",
-            inputs=[
-                io.Int.Input("width", default=512, min=16, max=8192, step=16),
-                io.Int.Input("height", default=512, min=16, max=8192, step=16),
-                io.Int.Input("length", default=97, min=1, max=1024),
-                io.Int.Input("batch_size", default=1, min=1, max=64),
-            ],
-            outputs=[
-                io.Latent.Output("latent"),
-            ],
-        )
-
-    @classmethod
-    def execute(cls, width: int, height: int, length: int, batch_size: int) -> io.NodeOutput:
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "width": ("INT", {"default": 512, "min": 16, "max": 8192, "step": 16}),
+                "height": ("INT", {"default": 512, "min": 16, "max": 8192, "step": 16}),
+                "length": ("INT", {"default": 97, "min": 1, "max": 1024}),
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            }
+        }
+    
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("latent",)
+    FUNCTION = "execute"
+    CATEGORY = "latent/audio"
+    
+    def execute(self, width: int, height: int, length: int, batch_size: int):
         logging.info("=" * 80)
         logging.info("[LTXVEmptyLatentAudioDebug] Creating empty latent")
         logging.info(f"[LTXVEmptyLatentAudioDebug] width={width}, height={height}, length={length}, batch_size={batch_size}")
@@ -160,30 +159,12 @@ class LTXVEmptyLatentAudioDebug(io.ComfyNode):
         logging.info(f"[LTXVEmptyLatentAudioDebug] Memory size: {latent.element_size() * latent.nelement() / 1024 / 1024:.2f} MB")
         logging.info("=" * 80)
 
-        return io.NodeOutput({"samples": latent})
-
-
-class LatentCutPlusExtension(ComfyExtension):
-    """Extension that registers all LatentCutPlus nodes."""
-
-    async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [LatentCutPlus, LTXVEmptyLatentAudioDebug]
+        return ({"samples": latent},)
 
 
 # ============================================================================
-# OLD API DEBUG NODE (accepts any type)
+# DEBUG ANY (old API)
 # ============================================================================
-
-class AnyType(str):
-    """Special class for representing any type - always returns True on type comparison"""
-    def __eq__(self, _) -> bool:
-        return True
-
-    def __ne__(self, __value: object) -> bool:
-        return False
-
-any_type = AnyType("*")
-
 
 class DebugAny:
     """Universal debug node that accepts ANY type using AnyType class."""
@@ -255,11 +236,18 @@ class DebugAny:
         return (value,)
 
 
-# Export for old API registration
+# ============================================================================
+# NODE REGISTRATION
+# ============================================================================
+
 NODE_CLASS_MAPPINGS = {
+    "LatentCutPlus": LatentCutPlus,
+    "LTXVEmptyLatentAudioDebug": LTXVEmptyLatentAudioDebug,
     "DebugAny": DebugAny,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "LatentCutPlus": "✂️ Latent Cut Plus",
+    "LTXVEmptyLatentAudioDebug": "🔊 LTXV Empty Latent Audio (Debug)",
     "DebugAny": "🔍 Debug Any",
 }
