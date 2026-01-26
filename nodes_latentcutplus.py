@@ -176,6 +176,80 @@ class LatentDebugInfo(io.ComfyNode):
         return io.NodeOutput(samples)
 
 
+class DebugAny(io.ComfyNode):
+    """Universal debug node that accepts any input type and logs it as string."""
+    
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="DebugAny",
+            display_name="Debug Any (Universal)",
+            search_aliases=["debug", "inspect", "log", "print", "debug any"],
+            category="utils",
+            description="Universal debug node: accepts any input, converts to string, logs it, and passes through unchanged.",
+            inputs=[
+                io.Wildcard.Input(
+                    "value",
+                    tooltip="Any value to debug (will be converted to string and logged)",
+                ),
+                io.String.Input(
+                    "label",
+                    default="",
+                    multiline=False,
+                    tooltip="Custom label to identify this value in logs (e.g., 'frames_count', 'model_name')",
+                ),
+            ],
+            outputs=[
+                io.Wildcard.Output(display_name="passthrough"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, value, label: str = "") -> io.NodeOutput:
+        # Create identifier for logs
+        log_id = f"[DebugAny:{label}]" if label else "[DebugAny]"
+        
+        # Convert value to string representation
+        try:
+            # Handle different types
+            if isinstance(value, torch.Tensor):
+                value_str = f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, device={value.device})"
+                value_details = f"min={value.min().item():.4f}, max={value.max().item():.4f}, mean={value.mean().item():.4f}"
+            elif isinstance(value, dict):
+                value_str = f"Dict with keys: {list(value.keys())}"
+                value_details = ""
+                for k, v in value.items():
+                    if isinstance(v, torch.Tensor):
+                        value_details += f"\n{log_id}   {k}: Tensor{tuple(v.shape)}"
+                    else:
+                        value_details += f"\n{log_id}   {k}: {type(v).__name__} = {str(v)[:100]}"
+            elif isinstance(value, (list, tuple)):
+                value_str = f"{type(value).__name__}(length={len(value)})"
+                value_details = f"First 3 items: {str(value[:3])[:200]}"
+            elif isinstance(value, (int, float, str, bool)):
+                value_str = f"{type(value).__name__} = {value}"
+                value_details = ""
+            else:
+                value_str = f"{type(value).__name__}"
+                value_details = f"repr: {repr(value)[:300]}"
+        except Exception as e:
+            value_str = f"<Error converting to string: {e}>"
+            value_details = ""
+        
+        # Log the value
+        logging.info("=" * 80)
+        logging.info(f"{log_id} VALUE DEBUG")
+        logging.info("=" * 80)
+        logging.info(f"{log_id} Type: {type(value).__name__}")
+        logging.info(f"{log_id} Value: {value_str}")
+        if value_details:
+            logging.info(f"{log_id} Details: {value_details}")
+        logging.info("=" * 80)
+        
+        # Passthrough unchanged
+        return io.NodeOutput(value)
+
+
 if AUDIO_VAE_AVAILABLE:
     class LTXVEmptyLatentAudioDebug(io.ComfyNode):
         """Debug version of LTXVEmptyLatentAudio with detailed logging."""
@@ -287,7 +361,7 @@ if AUDIO_VAE_AVAILABLE:
 
 class LatentCutPlusExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        nodes_list = [LatentCutPlus, LatentDebugInfo]
+        nodes_list = [LatentCutPlus, LatentDebugInfo, DebugAny]
         
         # Add audio debug node only if AudioVAE is available
         if AUDIO_VAE_AVAILABLE:
