@@ -177,7 +177,6 @@ class LatentDebugInfo(io.ComfyNode):
         # Passthrough
         return io.NodeOutput(samples)
 
-
 class DebugAny(io.ComfyNode):
     """Universal debug node using new API with multiple optional typed inputs."""
 
@@ -206,14 +205,15 @@ class DebugAny(io.ComfyNode):
                 ),
             ],
             outputs=[
-                io.Latent.Output("latent_out", optional=True),
-                io.Int.Output("int_out", optional=True),
-                io.Float.Output("float_out", optional=True),
-                io.String.Output("string_out", optional=True),
-                io.Model.Output("model_out", optional=True),
-                io.Vae.Output("vae_out", optional=True),
-                io.Conditioning.Output("conditioning_out", optional=True),
-                io.Image.Output("image_out", optional=True),
+                # Separate outputs for each type (no optional keyword)
+                io.Latent.Output("latent_out"),
+                io.Int.Output("int_out"),
+                io.Float.Output("float_out"),
+                io.String.Output("string_out"),
+                io.Model.Output("model_out"),
+                io.Vae.Output("vae_out"),
+                io.Conditioning.Output("conditioning_out"),
+                io.Image.Output("image_out"),
             ],
         )
 
@@ -253,6 +253,7 @@ class DebugAny(io.ComfyNode):
 
         if value is None:
             logging.warning(f"{log_id} No input connected!")
+            # Return empty dict - outputs will be None
             return io.NodeOutput({})
 
         try:
@@ -290,6 +291,7 @@ class DebugAny(io.ComfyNode):
             logging.info(f"{log_id} Details: {value_details}")
         logging.info("=" * 80)
 
+        # Return only the connected input on its corresponding output
         result = {}
         if latent is not None:
             result["latent_out"] = latent
@@ -309,6 +311,7 @@ class DebugAny(io.ComfyNode):
             result["image_out"] = image
 
         return io.NodeOutput(result)
+
 
 
 if AUDIO_VAE_AVAILABLE:
