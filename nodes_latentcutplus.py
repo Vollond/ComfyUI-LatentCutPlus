@@ -175,7 +175,6 @@ class LatentDebugInfo(io.ComfyNode):
         # Passthrough
         return io.NodeOutput(samples)
 
-
 class DebugAny(io.ComfyNode):
     """Universal debug node that accepts any input type and logs it as string."""
     
@@ -188,8 +187,9 @@ class DebugAny(io.ComfyNode):
             category="utils",
             description="Universal debug node: accepts any input, converts to string, logs it, and passes through unchanged.",
             inputs=[
-                io.Wildcard.Input(
-                    "value",
+                io.Input(
+                    id="value",
+                    type="*",  # Wildcard type - accepts anything
                     tooltip="Any value to debug (will be converted to string and logged)",
                 ),
                 io.String.Input(
@@ -200,7 +200,11 @@ class DebugAny(io.ComfyNode):
                 ),
             ],
             outputs=[
-                io.Wildcard.Output(display_name="passthrough"),
+                io.Output(
+                    id="passthrough",
+                    type="*",  # Same wildcard type for output
+                    display_name="passthrough"
+                ),
             ],
         )
 
@@ -248,6 +252,7 @@ class DebugAny(io.ComfyNode):
         
         # Passthrough unchanged
         return io.NodeOutput(value)
+
 
 
 if AUDIO_VAE_AVAILABLE:
