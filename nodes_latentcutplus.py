@@ -48,18 +48,32 @@ class LatentCutPlus(io.ComfyNode):
         size = int(x.shape[axis])
         
         logging.info(f"[LatentCutPlus] Input shape: {tuple(x.shape)}, dim={dim} (axis={axis}), size={size}")
-        logging.info(f"[LatentCutPlus] Params: index={index}, amount={amount}")
+        logging.info(f"[LatentCutPlus] Raw params: index={index}, amount={amount}")
         
-        # Python-style negative index handling
+        # Protection from overflow: clamp index to valid range
         original_index = index
         if index < 0:
-            index = size + index
-            logging.info(f"[LatentCutPlus] Negative index {original_index} → normalized to {index}")
+            # Python-style negative indexing
+            index = max(0, size + index)
+            if original_index != index:
+                logging.warning(f"[LatentCutPlus] Negative index {original_index} normalized to {index}")
+        else:
+            # Protection: if index >= size, clamp to size-1
+            if index >= size:
+                logging.warning(f"[LatentCutPlus] Index {index} >= size {size}, clamping to {size-1}")
+                index = max(0, size - 1)
         
-        start = max(0, index)
+        start = index
         
-        # ✅ Smart amount handling: if amount >= remaining size, slice to end
+        # Protection: check remaining size
         remaining = size - start
+        if remaining <= 0:
+            logging.error(f"[LatentCutPlus] No data to slice! start={start}, size={size}")
+            # Return empty slice
+            out["samples"] = x[:, :, 0:0] if axis == 2 else x
+            return io.NodeOutput(out)
+        
+        # Smart amount handling: if amount >= remaining, slice to end
         if amount >= remaining:
             end = size
             actual_amount = remaining
@@ -68,7 +82,7 @@ class LatentCutPlus(io.ComfyNode):
             actual_amount = max(1, int(amount))
             end = start + actual_amount
 
-        logging.info(f"[LatentCutPlus] Slice: [{start}:{end}] (actual length={actual_amount})")
+        logging.info(f"[LatentCutPlus] Final slice: [{start}:{end}] (length={actual_amount})")
 
         # Build slice tuple
         sl = [slice(None)] * x.ndim
