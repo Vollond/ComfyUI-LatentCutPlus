@@ -1,6 +1,6 @@
 import logging
 import torch
-from comfy_api.latest import io
+from comfy_api.latest import ComfyExtension, io
 
 
 class LatentCutPlus(io.ComfyNode):
@@ -24,8 +24,8 @@ class LatentCutPlus(io.ComfyNode):
                 io.Int.Input(
                     "index",
                     default=0,
-                    min=-9999,
-                    max=9999,
+                    min=-2147483647,
+                    max=2147483647,
                     tooltip="Start index (supports negative indexing)",
                 ),
                 io.Int.Input(
@@ -118,12 +118,56 @@ class LatentCutPlus(io.ComfyNode):
         return io.NodeOutput(out)
 
 
-class LatentCutPlusExtension(io.ComfyAPIExtension):
-    """Extension that registers LatentCutPlus node."""
+class LTXVEmptyLatentAudioDebug(io.ComfyNode):
+    """Debug node for LTXV empty latent with detailed logging."""
 
     @classmethod
-    def get_nodes(cls):
-        return [LatentCutPlus]
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LTXVEmptyLatentAudioDebug",
+            display_name="LTXV Empty Latent Audio (Debug)",
+            category="latent/audio",
+            description="Create empty latent for LTXV with audio dimensions and detailed logging",
+            inputs=[
+                io.Int.Input("width", default=512, min=16, max=8192, step=16),
+                io.Int.Input("height", default=512, min=16, max=8192, step=16),
+                io.Int.Input("length", default=97, min=1, max=1024),
+                io.Int.Input("batch_size", default=1, min=1, max=64),
+            ],
+            outputs=[
+                io.Latent.Output("latent"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, width: int, height: int, length: int, batch_size: int) -> io.NodeOutput:
+        logging.info("=" * 80)
+        logging.info("[LTXVEmptyLatentAudioDebug] Creating empty latent")
+        logging.info(f"[LTXVEmptyLatentAudioDebug] width={width}, height={height}, length={length}, batch_size={batch_size}")
+
+        # LTXV latent dimensions: (batch, channels, frames, height/8, width/8)
+        latent_t = length
+        latent_h = height // 8
+        latent_w = width // 8
+        channels = 128
+
+        shape = (batch_size, channels, latent_t, latent_h, latent_w)
+        logging.info(f"[LTXVEmptyLatentAudioDebug] Creating latent with shape: {shape}")
+
+        latent = torch.zeros(shape, dtype=torch.float32, device="cpu")
+        
+        logging.info(f"[LTXVEmptyLatentAudioDebug] Created tensor: shape={tuple(latent.shape)}, dtype={latent.dtype}, device={latent.device}")
+        logging.info(f"[LTXVEmptyLatentAudioDebug] Memory size: {latent.element_size() * latent.nelement() / 1024 / 1024:.2f} MB")
+        logging.info("=" * 80)
+
+        return io.NodeOutput({"samples": latent})
+
+
+class LatentCutPlusExtension(ComfyExtension):
+    """Extension that registers all LatentCutPlus nodes."""
+
+    async def get_node_list(self) -> list[type[io.ComfyNode]]:
+        return [LatentCutPlus, LTXVEmptyLatentAudioDebug]
 
 
 # ============================================================================
