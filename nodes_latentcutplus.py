@@ -174,14 +174,16 @@ class LatentDebugInfo(io.ComfyNode):
         
         # Passthrough
         return io.NodeOutput(samples)
-class DebugAny(io.ComfyNode):
-    """Universal debug node that accepts any input type and logs it as string."""
+
+
+class DebugAny:
+    """Universal debug node that accepts any input type and logs it as string (Old API)."""
     
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "value": ("*",),  # Wildcard type in old API style
+                "value": ("*",),  # Wildcard type
                 "label": ("STRING", {"default": "", "multiline": False}),
             }
         }
@@ -191,8 +193,7 @@ class DebugAny(io.ComfyNode):
     FUNCTION = "execute"
     CATEGORY = "utils"
     
-    @classmethod
-    def execute(cls, value, label: str = ""):
+    def execute(self, value, label: str = ""):
         # Create identifier for logs
         log_id = f"[DebugAny:{label}]" if label else "[DebugAny]"
         
@@ -235,8 +236,6 @@ class DebugAny(io.ComfyNode):
         
         # Passthrough unchanged
         return (value,)
-
-
 
 
 if AUDIO_VAE_AVAILABLE:
@@ -348,9 +347,20 @@ if AUDIO_VAE_AVAILABLE:
             )
 
 
+# Register old API nodes separately
+NODE_CLASS_MAPPINGS = {
+    "DebugAny": DebugAny,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "DebugAny": "Debug Any (Universal)",
+}
+
+
 class LatentCutPlusExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        nodes_list = [LatentCutPlus, LatentDebugInfo, DebugAny]
+        # Only register NEW API nodes here (NOT DebugAny)
+        nodes_list = [LatentCutPlus, LatentDebugInfo]
         
         # Add audio debug node only if AudioVAE is available
         if AUDIO_VAE_AVAILABLE:
