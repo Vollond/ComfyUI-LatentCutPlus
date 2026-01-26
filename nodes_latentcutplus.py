@@ -174,42 +174,25 @@ class LatentDebugInfo(io.ComfyNode):
         
         # Passthrough
         return io.NodeOutput(samples)
-
 class DebugAny(io.ComfyNode):
     """Universal debug node that accepts any input type and logs it as string."""
     
     @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="DebugAny",
-            display_name="Debug Any (Universal)",
-            search_aliases=["debug", "inspect", "log", "print", "debug any"],
-            category="utils",
-            description="Universal debug node: accepts any input, converts to string, logs it, and passes through unchanged.",
-            inputs=[
-                io.Input(
-                    id="value",
-                    type="*",  # Wildcard type - accepts anything
-                    tooltip="Any value to debug (will be converted to string and logged)",
-                ),
-                io.String.Input(
-                    "label",
-                    default="",
-                    multiline=False,
-                    tooltip="Custom label to identify this value in logs (e.g., 'frames_count', 'model_name')",
-                ),
-            ],
-            outputs=[
-                io.Output(
-                    id="passthrough",
-                    type="*",  # Same wildcard type for output
-                    display_name="passthrough"
-                ),
-            ],
-        )
-
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "value": ("*",),  # Wildcard type in old API style
+                "label": ("STRING", {"default": "", "multiline": False}),
+            }
+        }
+    
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("passthrough",)
+    FUNCTION = "execute"
+    CATEGORY = "utils"
+    
     @classmethod
-    def execute(cls, value, label: str = "") -> io.NodeOutput:
+    def execute(cls, value, label: str = ""):
         # Create identifier for logs
         log_id = f"[DebugAny:{label}]" if label else "[DebugAny]"
         
@@ -251,7 +234,8 @@ class DebugAny(io.ComfyNode):
         logging.info("=" * 80)
         
         # Passthrough unchanged
-        return io.NodeOutput(value)
+        return (value,)
+
 
 
 
