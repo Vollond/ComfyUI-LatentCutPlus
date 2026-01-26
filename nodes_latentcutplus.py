@@ -345,6 +345,142 @@ if AUDIO_VAE_AVAILABLE:
                     "type": "audio",
                 }
             )
+class DebugAnyNew(io.ComfyNode):
+    """Universal debug node using new API with multiple optional inputs."""
+    
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="DebugAnyNew",
+            display_name="Debug Any",
+            search_aliases=["debug", "inspect", "log", "print", "debug any"],
+            category="utils",
+            description="Universal debug: connect ANY type to 'value' input, adds label, logs and passes through.",
+            inputs=[
+                # Multiple optional inputs for different types
+                io.Latent.Input("latent", optional=True),
+                io.Int.Input("int_value", optional=True),
+                io.Float.Input("float_value", optional=True),
+                io.String.Input("string_value", optional=True, multiline=True),
+                io.Model.Input("model", optional=True),
+                io.Vae.Input("vae", optional=True),
+                io.Conditioning.Input("conditioning", optional=True),
+                io.Image.Input("image", optional=True),
+                # Label for context
+                io.String.Input(
+                    "label",
+                    default="",
+                    multiline=False,
+                    tooltip="Custom label to identify this value in logs",
+                ),
+            ],
+            outputs=[
+                io.Latent.Output("latent_out", optional=True),
+                io.Int.Output("int_out", optional=True),
+                io.Float.Output("float_out", optional=True),
+                io.String.Output("string_out", optional=True),
+                io.Model.Output("model_out", optional=True),
+                io.Vae.Output("vae_out", optional=True),
+                io.Conditioning.Output("conditioning_out", optional=True),
+                io.Image.Output("image_out", optional=True),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        label: str = "",
+        latent=None,
+        int_value=None,
+        float_value=None,
+        string_value=None,
+        model=None,
+        vae=None,
+        conditioning=None,
+        image=None,
+    ) -> io.NodeOutput:
+        # Find which input was provided
+        inputs = {
+            "latent": latent,
+            "int": int_value,
+            "float": float_value,
+            "string": string_value,
+            "model": model,
+            "vae": vae,
+            "conditioning": conditioning,
+            "image": image,
+        }
+        
+        # Get the first non-None input
+        value = None
+        value_type = None
+        for name, val in inputs.items():
+            if val is not None:
+                value = val
+                value_type = name
+                break
+        
+        if value is None:
+            logging.warning(f"[DebugAny:{label}] No input connected!")
+            return io.NodeOutput({})
+        
+        # Create log identifier
+        log_id = f"[DebugAny:{label}]" if label else "[DebugAny]"
+        
+        # Log based on type
+        try:
+            if isinstance(value, torch.Tensor):
+                value_str = f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, device={value.device})"
+                value_details = f"min={value.min().item():.4f}, max={value.max().item():.4f}, mean={value.mean().item():.4f}"
+            elif isinstance(value, dict):
+                value_str = f"Dict with keys: {list(value.keys())}"
+                value_details = ""
+                for k, v in value.items():
+                    if isinstance(v, torch.Tensor):
+                        value_details += f"\n{log_id}   {k}: Tensor{tuple(v.shape)}"
+                    else:
+                        value_details += f"\n{log_id}   {k}: {type(v).__name__} = {str(v)[:100]}"
+            elif isinstance(value, (int, float, str, bool)):
+                value_str = f"{type(value).__name__} = {value}"
+                value_details = ""
+            else:
+                value_str = f"{type(value).__name__}"
+                value_details = f"repr: {repr(value)[:300]}"
+        except Exception as e:
+            value_str = f"<Error: {e}>"
+            value_details = ""
+        
+        # Log it
+        logging.info("=" * 80)
+        logging.info(f"{log_id} VALUE DEBUG")
+        logging.info("=" * 80)
+        logging.info(f"{log_id} Input type: {value_type}")
+        logging.info(f"{log_id} Python type: {type(value).__name__}")
+        logging.info(f"{log_id} Value: {value_str}")
+        if value_details:
+            logging.info(f"{log_id} Details: {value_details}")
+        logging.info("=" * 80)
+        
+        # Return on correct output
+        result = {}
+        if latent is not None:
+            result["latent_out"] = latent
+        if int_value is not None:
+            result["int_out"] = int_value
+        if float_value is not None:
+            result["float_out"] = float_value
+        if string_value is not None:
+            result["string_out"] = string_value
+        if model is not None:
+            result["model_out"] = model
+        if vae is not None:
+            result["vae_out"] = vae
+        if conditioning is not None:
+            result["conditioning_out"] = conditioning
+        if image is not None:
+            result["image_out"] = image
+        
+        return io.NodeOutput(result)
 
 
 # Register old API nodes separately
@@ -359,12 +495,11 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
 class LatentCutPlusExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        # Only register NEW API nodes here (NOT DebugAny)
-        nodes_list = [LatentCutPlus, LatentDebugInfo]
+        nodes_list = [LatentCutPlus, LatentDebugInfo, DebugAnyNew]  # ← Додав DebugAnyNew
         
-        # Add audio debug node only if AudioVAE is available
         if AUDIO_VAE_AVAILABLE:
             nodes_list.append(LTXVEmptyLatentAudioDebug)
             logging.info("[LatentCutPlus] Registered LTXVEmptyLatentAudioDebug node")
         
         return nodes_list
+
