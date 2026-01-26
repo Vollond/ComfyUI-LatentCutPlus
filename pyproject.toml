@@ -1,0 +1,14 @@
+[project]
+name = "comfyui-latentcutplus"
+version = "0.1.0"
+description = "ComfyUI custom node: LatentCutPlus (slice latents with amount=-1 to end)"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+
+[tool.comfy]
+publisher = "your_github_username"
+display_name = "LatentCutPlus"
+# Если захочешь фронтенд-часть: web_directory = "web"
+
+[project.urls]
+Repository = "https://github.com/your_github_username/ComfyUI-LatentCutPlus"
