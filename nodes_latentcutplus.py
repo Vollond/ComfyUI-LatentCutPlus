@@ -41,15 +41,15 @@ class LatentCutPlus:
     CATEGORY = "latent"
     
     def execute(self, samples, dim: str, index: int, amount: int):
-        out = samples.copy()
-
+        out = {}
+    
         if "samples" not in samples:
             raise RuntimeError("LatentCutPlus: input LATENT has no 'samples' key")
-
+    
         x: torch.Tensor = samples["samples"]
         if not isinstance(x, torch.Tensor):
             raise RuntimeError("LatentCutPlus: samples['samples'] is not a torch.Tensor")
-
+    
         # Map dimension name to axis
         if dim == "x":
             axis = x.ndim - 1
@@ -57,12 +57,12 @@ class LatentCutPlus:
             axis = x.ndim - 2
         else:  # "t"
             axis = x.ndim - 3
-
+    
         size = int(x.shape[axis])
-
+    
         logging.info(f"[LatentCutPlus] Input shape: {tuple(x.shape)}, dim={dim} (axis={axis}), size={size}")
         logging.info(f"[LatentCutPlus] Raw params: index={index}, amount={amount}")
-
+    
         # Protection from overflow: clamp index to valid range
         original_index = index
         if index < 0:
@@ -75,9 +75,9 @@ class LatentCutPlus:
             if index >= size:
                 logging.warning(f"[LatentCutPlus] Index {index} >= size {size}, clamping to {size-1}")
                 index = max(0, size - 1)
-
+    
         start = index
-
+    
         # Protection: check remaining size
         remaining = size - start
         if remaining <= 0:
@@ -85,7 +85,7 @@ class LatentCutPlus:
             # Return empty slice
             out["samples"] = x[:, :, 0:0] if axis == 2 else x
             return (out,)
-
+    
         # Smart amount handling: if amount >= remaining, slice to end
         if amount >= remaining:
             end = size
@@ -94,26 +94,45 @@ class LatentCutPlus:
         else:
             actual_amount = max(1, int(amount))
             end = start + actual_amount
-
+    
         logging.info(f"[LatentCutPlus] Final slice: [{start}:{end}] (length={actual_amount})")
-
+    
         # Build slice tuple
         sl = [slice(None)] * x.ndim
         sl[axis] = slice(start, end)
-
+    
         out_tensor = x[tuple(sl)].contiguous()
         out["samples"] = out_tensor
-
+    
         logging.info(f"[LatentCutPlus] Output shape: {tuple(out_tensor.shape)}")
-
+    
+        # Handle batch_index if present (для AnimateDiff и подобных)
+        if "batch_index" in samples:
+            bi = samples["batch_index"]
+            if isinstance(bi, torch.Tensor) and bi.ndim == x.ndim and int(bi.shape[axis]) == size:
+                out["batch_index"] = bi[tuple(sl)].contiguous()
+                logging.info(f"[LatentCutPlus] Batch index sliced: {tuple(out['batch_index'].shape)}")
+            else:
+                # Если размер не совпадает, копируем как есть
+                if isinstance(bi, torch.Tensor):
+                    out["batch_index"] = bi.clone()
+                else:
+                    out["batch_index"] = bi
+    
         # Handle noise_mask if present
-        if "noise_mask" in out and isinstance(out["noise_mask"], torch.Tensor):
-            nm: torch.Tensor = out["noise_mask"]
-            if nm.ndim == x.ndim and int(nm.shape[axis]) == size:
+        if "noise_mask" in samples:
+            nm = samples["noise_mask"]
+            if isinstance(nm, torch.Tensor) and nm.ndim == x.ndim and int(nm.shape[axis]) == size:
                 out["noise_mask"] = nm[tuple(sl)].contiguous()
                 logging.info(f"[LatentCutPlus] Noise mask sliced: {tuple(out['noise_mask'].shape)}")
-
+            else:
+                if isinstance(nm, torch.Tensor):
+                    out["noise_mask"] = nm.clone()
+                else:
+                    out["noise_mask"] = nm
+    
         return (out,)
+
 
 
 # ============================================================================
