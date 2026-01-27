@@ -40,28 +40,29 @@ class LatentCutPlus:
     CATEGORY = "latent"
     
     @classmethod
-    def IS_CHANGED(cls, **kwargs):
+    def IS_CHANGED(cls, samples, dim, index, amount):
         """Invalidate cache on shape/dtype/device/params change"""
-        samples = kwargs.get("samples", None)
-        dim = kwargs.get("dim", "t")
-        index = kwargs.get("index", 0)
-        amount = kwargs.get("amount", 1)
+        if samples is None or not isinstance(samples, dict):
+            import random
+            return random.random()
         
-        # Проверка что samples не None и содержит ключ "samples"
-        if samples is not None and isinstance(samples, dict) and "samples" in samples:
-            x = samples.get("samples")
-            if isinstance(x, torch.Tensor):
-                import hashlib
-                m = hashlib.sha256()
-                m.update(str(tuple(x.shape)).encode())
-                m.update(str(x.dtype).encode())
-                m.update(str(x.device).encode())
-                m.update(f"{dim}_{index}_{amount}".encode())
-                return m.digest().hex()
+        if "samples" not in samples:
+            import random
+            return random.random()
         
-        # Fallback: всегда разный хеш если данных нет
-        import random
-        return random.random()
+        x = samples.get("samples")
+        if not isinstance(x, torch.Tensor):
+            import random
+            return random.random()
+        
+        import hashlib
+        m = hashlib.sha256()
+        m.update(str(tuple(x.shape)).encode())
+        m.update(str(x.dtype).encode())
+        m.update(str(x.device).encode())
+        m.update(f"{dim}_{index}_{amount}".encode())
+        return m.digest().hex()
+
 
     
     def execute(self, samples, dim: str, index: int, amount: int):
