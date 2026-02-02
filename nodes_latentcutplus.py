@@ -538,8 +538,6 @@ class LTXVTiledVAEDecode:
         if last_frame_fix:
             output = output[:-time_scale_factor, :, :]
         return (output,)
-
-
 class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
     """
     PRODUCTION-READY Direct MP4 Encoder with Audio Support
@@ -551,15 +549,18 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
     - Comprehensive error handling
     - Memory management (CPU offload, aggressive cleanup)
     - Frame count verification
+    - H.265/HEVC support with 10-bit color
 
     Fixes Applied:
-    1. Correct file extensions (h265-mp4 → .mp4)
-    2. Proper temporal chunk boundaries
-    3. CORRECT overlap formula: 1 + (n-1)*scale (NOT n*scale)
-    4. Audio muxing with video validation
-    5. BrokenPipeError handling with stderr capture
-    6. Disk space pre-check
-    7. FFmpeg health check
+    1. Separate codec and pix_fmt parameters
+    2. Proper H.265/libx265 support for 10-bit
+    3. Correct file extensions based on codec
+    4. Proper temporal chunk boundaries
+    5. CORRECT overlap formula: 1 + (n-1)*scale (NOT n*scale)
+    6. Audio muxing with video validation
+    7. BrokenPipeError handling with stderr capture
+    8. Disk space pre-check
+    9. FFmpeg health check
     """
 
     @classmethod
@@ -578,10 +579,11 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 "decode_device": (["gpu", "cpu"], {"default": "cpu"}),
                 "aggressive_cleanup": ("BOOLEAN", {"default": True}),
                 "output_path": ("STRING", {"default": "", "multiline": False}),
-                "fps": ("INT", {"default": 30, "min": 1, "max": 120}),
-                "crf": ("INT", {"default": 23, "min": 0, "max": 51}),
-                "preset": (["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], {"default": "medium"}),
-                "pix_fmt": (["yuv420p", "yuv422p", "yuv444p", "yuv420p10le"], {"default": "yuv420p"}),
+                "fps": ("INT", {"default": 24, "min": 1, "max": 120}),
+                "codec": (["h264-mp4", "h265-mp4", "hevc-mp4"], {"default": "h265-mp4"}),
+                "crf": ("INT", {"default": 20, "min": 0, "max": 51}),
+                "preset": (["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], {"default": "slow"}),
+                "pix_fmt": (["yuv420p", "yuv422p", "yuv444p", "yuv420p10le"], {"default": "yuv420p10le"}),
             },
             "optional": {
                 "audio": ("AUDIO",),
@@ -608,10 +610,11 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         decode_device="cpu",
         aggressive_cleanup=True,
         output_path="",
-        fps=30,
-        crf=23,
-        preset="medium",
-        pix_fmt="yuv420p",
+        fps=24,
+        codec="h265-mp4",
+        crf=20,
+        preset="slow",
+        pix_fmt="yuv420p10le",
         audio=None,
     ):
         # Validation
@@ -641,10 +644,10 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         logging.info(f"[DirectEncode] Input: {frames} latent frames → Expected output: {expected_output_frames} frames")
         logging.info(f"[DirectEncode] time_scale_factor: {time_scale_factor}")
 
-        # Setup output path with correct extension
+        # Setup output path with correct extension based on codec
         if not output_path:
             output_dir = Path(folder_paths.get_output_directory())
-            file_ext = EXTENSION_MAP.get(pix_fmt, "mp4")
+            file_ext = EXTENSION_MAP.get(codec, "mp4")
             timestamp = int(time.time())
             output_path = str(output_dir / f"ltxv_{timestamp}.{file_ext}")
 
@@ -670,13 +673,13 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
         logging.info(f"[DirectEncode] Output: {final_output}")
         logging.info(f"[DirectEncode] Resolution: {output_width}x{output_height} @ {fps} FPS")
-        logging.info(f"[DirectEncode] Quality: CRF {crf}, Preset: {preset}, Pix: {pix_fmt}")
+        logging.info(f"[DirectEncode] Codec: {codec}, Quality: CRF {crf}, Preset: {preset}, Pix: {pix_fmt}")
 
         # Encode video
         try:
             total_encoded_frames = self._encode_video_stream(
                 samples, vae, video_encode_path, output_height, output_width,
-                time_scale_factor, fps, crf, preset, pix_fmt,
+                time_scale_factor, fps, codec, crf, preset, pix_fmt,
                 spatial_tiles, spatial_overlap, temporal_tile_length, temporal_overlap,
                 decode_device, working_device, working_dtype, aggressive_cleanup,
                 expected_output_frames
@@ -718,7 +721,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
     def _encode_video_stream(
         self, samples, vae, output_path, output_height, output_width,
-        time_scale_factor, fps, crf, preset, pix_fmt,
+        time_scale_factor, fps, codec, crf, preset, pix_fmt,
         spatial_tiles, spatial_overlap, temporal_tile_length, temporal_overlap,
         decode_device, working_device, working_dtype, aggressive_cleanup,
         expected_output_frames
@@ -727,7 +730,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
         # Generate and start ffmpeg
         ffmpeg_cmd = self._get_ffmpeg_command(
-            output_width, output_height, fps, crf, preset, pix_fmt, str(output_path)
+            output_width, output_height, fps, codec, crf, preset, pix_fmt, str(output_path)
         )
 
         logging.info(f"[DirectEncode] Starting ffmpeg: {' '.join(ffmpeg_cmd)}...")
@@ -746,8 +749,9 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         # Verify ffmpeg started successfully
         time.sleep(0.5)
         if ffmpeg_process.poll() is not None:
-            stderr = ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
-            raise RuntimeError(f"FFmpeg failed to start:\n{stderr}")
+            _, stderr = ffmpeg_process.communicate()
+            stderr_text = stderr.decode('utf-8', errors='ignore')
+            raise RuntimeError(f"FFmpeg failed to start:\n{stderr_text}")
 
         logging.info("[DirectEncode] FFmpeg started successfully")
 
@@ -807,7 +811,6 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
                 # Drop overlap frames with CORRECT calculation
                 if frames_to_drop > 0:
-                    # CRITICAL: Use correct formula accounting for +1
                     decoded_frames_to_drop = compute_overlap_decoded_frames(
                         frames_to_drop, time_scale_factor
                     )
@@ -839,12 +842,12 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                         ffmpeg_process.stdin.flush()
                         total_encoded_frames += 1
                     except BrokenPipeError:
-                        # FFmpeg crashed - get error details
-                        stderr = ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
+                        _, stderr = ffmpeg_process.communicate()
+                        stderr_text = stderr.decode('utf-8', errors='ignore')
                         logging.error(f"[DirectEncode] ❌ FFmpeg pipe broken at frame {total_encoded_frames}")
-                        logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr}")
+                        logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr_text}")
                         raise RuntimeError(
-                            f"FFmpeg encoding failed after {total_encoded_frames} frames:\n{stderr}"
+                            f"FFmpeg encoding failed after {total_encoded_frames} frames:\n{stderr_text}"
                         )
                     except Exception as e:
                         logging.error(f"[DirectEncode] Error writing frame {total_encoded_frames}: {e}")
@@ -863,7 +866,6 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 chunk_idx += 1
 
         except Exception as e:
-            # Cleanup on error
             try:
                 ffmpeg_process.stdin.close()
             except:
@@ -887,13 +889,13 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
         logging.info("[DirectEncode] Waiting for FFmpeg to finish...")
 
-        stderr_output = ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
-        return_code = ffmpeg_process.wait()
+        stdout, stderr = ffmpeg_process.communicate()
+        stderr_output = stderr.decode('utf-8', errors='ignore')
 
-        if return_code != 0:
-            logging.error(f"[DirectEncode] FFmpeg exited with code {return_code}")
+        if ffmpeg_process.returncode != 0:
+            logging.error(f"[DirectEncode] FFmpeg exited with code {ffmpeg_process.returncode}")
             logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr_output}")
-            raise RuntimeError(f"FFmpeg encoding failed (exit code {return_code}):\n{stderr_output}")
+            raise RuntimeError(f"FFmpeg encoding failed (exit code {ffmpeg_process.returncode}):\n{stderr_output}")
 
         # Show last part of ffmpeg output for info
         if stderr_output:
@@ -952,15 +954,15 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             # FFmpeg mux command
             ffmpeg_cmd = [
                 'ffmpeg', '-y',
-                '-i', str(video_path),     # Video input
-                '-ar', str(sample_rate),   # Audio sample rate
-                '-ac', str(channels),       # Audio channels
-                '-f', 'f32le',              # Audio format (float32 little-endian)
-                '-i', 'pipe:0',             # Audio input from stdin
-                '-c:v', 'copy',             # Copy video (no re-encode)
-                '-c:a', 'aac',              # Encode audio to AAC
-                '-b:a', '192k',             # Audio bitrate
-                '-shortest',                # Stop at shortest stream
+                '-i', str(video_path),
+                '-ar', str(sample_rate),
+                '-ac', str(channels),
+                '-f', 'f32le',
+                '-i', 'pipe:0',
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-shortest',
                 str(output_path)
             ]
 
@@ -973,13 +975,10 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 stderr=subprocess.PIPE
             )
 
-            # Convert and send audio data
-            # VHS format: [batch, channels, samples]
-            # FFmpeg f32le expects: [samples, channels] interleaved
-            audio_np = waveform.squeeze(0).transpose(0, 1).numpy()
+            # Convert audio: [batch, channels, samples] → [samples, channels]
+            audio_np = waveform[0].transpose(0, 1).numpy()
             audio_bytes = audio_np.tobytes()
 
-            # Use communicate() with timeout for safety
             try:
                 stdout, stderr = proc.communicate(input=audio_bytes, timeout=60)
             except subprocess.TimeoutExpired:
@@ -999,8 +998,17 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             logging.error(f"[DirectEncode] Audio muxing error: {e}")
             raise
 
-    def _get_ffmpeg_command(self, width, height, fps, crf, preset, pix_fmt, output):
-        """Generate ffmpeg encoding command with proper color handling"""
+    def _get_ffmpeg_command(self, width, height, fps, codec, crf, preset, pix_fmt, output):
+        """Generate ffmpeg encoding command with proper codec selection"""
+
+        # Map codec parameter to ffmpeg encoder
+        codec_map = {
+            "h264-mp4": "libx264",
+            "h265-mp4": "libx265",
+            "hevc-mp4": "libx265",
+        }
+        
+        encoder = codec_map.get(codec, "libx265")
 
         cmd = [
             'ffmpeg', '-y',
@@ -1008,20 +1016,20 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             '-f', 'rawvideo',
             '-vcodec', 'rawvideo',
             '-s', f'{width}x{height}',
-            '-pix_fmt', 'rgb24',        # Input is RGB from numpy
+            '-pix_fmt', 'rgb24',
             '-r', str(fps),
             # Input color space (sRGB)
-            '-color_range', 'pc',       # Full range RGB (0-255)
-            '-colorspace', 'rgb',        # Input is RGB
+            '-color_range', 'pc',
+            '-colorspace', 'rgb',
             '-color_primaries', 'bt709',
-            '-color_trc', 'iec61966-2-1',  # sRGB gamma
-            '-i', 'pipe:0',              # Read from stdin
+            '-color_trc', 'iec61966-2-1',
+            '-i', 'pipe:0',
             # Encoding settings
-            '-c:v', 'libx264',
+            '-c:v', encoder,
             '-crf', str(crf),
             '-preset', preset,
-            '-pix_fmt', pix_fmt,         # Output pixel format
-            '-movflags', '+faststart',   # Enable streaming
+            '-pix_fmt', pix_fmt,
+            '-movflags', '+faststart',
             # Output color space (BT.709 for video)
             '-colorspace', 'bt709',
             '-color_primaries', 'bt709',
