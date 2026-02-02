@@ -380,12 +380,12 @@ class VideoCombine_LTXV:
         return max_counter + 1
 
 
-NODE_CLASS_MAPPINGS = {
+NODE_CLASS_MAPPINGS2 = {
     "LTXVTiledVAEDecode": LTXVTiledVAEDecode,
     "VideoCombine_LTXV": VideoCombine_LTXV,
 }
 
-NODE_DISPLAY_NAME_MAPPINGS = {
+NODE_DISPLAY_NAME_MAPPINGS2 = {
     "LTXVTiledVAEDecode": "🔲 LTXV Tiled VAE Decode",
     "VideoCombine_LTXV": "🎬 Video Combine (LTXV Auto-Chunked)",
 }
