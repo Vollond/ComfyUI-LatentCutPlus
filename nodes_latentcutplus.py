@@ -538,6 +538,8 @@ class LTXVTiledVAEDecode:
         if last_frame_fix:
             output = output[:-time_scale_factor, :, :]
         return (output,)
+
+
 class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
     """
     PRODUCTION-READY Direct MP4 Encoder with Audio Support
@@ -545,22 +547,20 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
     Features:
     - Zero intermediate storage (direct ffmpeg pipe)
     - Correct temporal chunking with proper overlap calculation
-    - Audio muxing with validation
+    - Lossless audio support (FLAC)
+    - Memory-efficient frame-by-frame processing
     - Comprehensive error handling
     - Memory management (CPU offload, aggressive cleanup)
     - Frame count verification
     - H.265/HEVC support with 10-bit color
 
-    Fixes Applied:
+    Optimizations Applied:
     1. Separate codec and pix_fmt parameters
     2. Proper H.265/libx265 support for 10-bit
-    3. Correct file extensions based on codec
-    4. Proper temporal chunk boundaries
-    5. CORRECT overlap formula: 1 + (n-1)*scale (NOT n*scale)
-    6. Audio muxing with video validation
-    7. BrokenPipeError handling with stderr capture
-    8. Disk space pre-check
-    9. FFmpeg health check
+    3. Frame-by-frame conversion to reduce memory overhead
+    4. FLAC lossless audio encoding
+    5. Proper temporal chunk boundaries with overlap
+    6. Audio codec selection (FLAC/AAC-320k/AAC-192k)
     """
 
     @classmethod
@@ -587,6 +587,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             },
             "optional": {
                 "audio": ("AUDIO",),
+                "audio_codec": (["flac", "aac-320k", "aac-192k"], {"default": "flac"}),
             },
         }
 
@@ -616,6 +617,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         preset="slow",
         pix_fmt="yuv420p10le",
         audio=None,
+        audio_codec="flac",
     ):
         # Validation
         if temporal_tile_length < temporal_overlap + 1:
@@ -666,7 +668,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             temp_video = output_path.with_suffix('.temp.mp4')
             final_output = output_path
             video_encode_path = temp_video
-            logging.info("[DirectEncode] Audio detected - will mux after encoding")
+            logging.info(f"[DirectEncode] Audio detected - will mux after encoding (codec: {audio_codec})")
         else:
             final_output = output_path
             video_encode_path = output_path
@@ -703,7 +705,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         # Mux audio if present
         if audio is not None:
             try:
-                self._mux_audio(temp_video, audio, final_output, fps, total_encoded_frames)
+                self._mux_audio(temp_video, audio, final_output, fps, total_encoded_frames, audio_codec)
                 temp_video.unlink()
                 logging.info("[DirectEncode] Cleaned up temp video")
             except Exception as e:
@@ -726,14 +728,14 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         decode_device, working_device, working_dtype, aggressive_cleanup,
         expected_output_frames
     ):
-        """Encode video stream with proper temporal chunking"""
+        """Encode video stream with proper temporal chunking and memory-efficient frame processing"""
 
         # Generate and start ffmpeg
         ffmpeg_cmd = self._get_ffmpeg_command(
             output_width, output_height, fps, codec, crf, preset, pix_fmt, str(output_path)
         )
 
-        logging.info(f"[DirectEncode] Starting ffmpeg: {' '.join(ffmpeg_cmd)}...")
+        logging.info(f"[DirectEncode] Starting ffmpeg: {' '.join(ffmpeg_cmd[:20])}...")
 
         try:
             ffmpeg_process = subprocess.Popen(
@@ -828,17 +830,18 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                         f"{decoded_tile.shape[1]} remain"
                     )
 
-                # Convert to uint8 RGB
+                # Move to CPU and get frame count
                 decoded_tile = decoded_tile.cpu()
-                decoded_np = (decoded_tile[0].numpy() * 255).clip(0, 255).astype(np.uint8)
+                chunk_output_frames = decoded_tile.shape[1]
 
-                chunk_output_frames = decoded_np.shape[0]
-
-                # Write frames to ffmpeg
+                # Write frames to ffmpeg ONE AT A TIME (memory efficient)
                 for frame_idx in range(chunk_output_frames):
-                    frame = decoded_np[frame_idx]
+                    # Convert single frame to uint8
+                    frame = decoded_tile[0, frame_idx].numpy()
+                    frame_uint8 = (frame * 255).clip(0, 255).astype(np.uint8)
+                    
                     try:
-                        ffmpeg_process.stdin.write(frame.tobytes())
+                        ffmpeg_process.stdin.write(frame_uint8.tobytes())
                         ffmpeg_process.stdin.flush()
                         total_encoded_frames += 1
                     except BrokenPipeError:
@@ -852,12 +855,15 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                     except Exception as e:
                         logging.error(f"[DirectEncode] Error writing frame {total_encoded_frames}: {e}")
                         raise
+                    
+                    # Free memory immediately after each frame
+                    del frame, frame_uint8
 
                 logging.info(f"[DirectEncode]   Wrote: {chunk_output_frames} frames (total: {total_encoded_frames})")
 
                 # Memory cleanup
                 if aggressive_cleanup:
-                    del tile, tile_latents, decoded_tile, decoded_np
+                    del tile, tile_latents, decoded_tile
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                     gc.collect()
@@ -904,8 +910,8 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
         return total_encoded_frames
 
-    def _mux_audio(self, video_path, audio, output_path, fps, total_frames):
-        """Mux audio with video (with pre-validation)"""
+    def _mux_audio(self, video_path, audio, output_path, fps, total_frames, audio_codec="flac"):
+        """Mux audio with video with selectable codec (FLAC lossless or AAC)"""
         try:
             # Validate video file first
             logging.info("[DirectEncode] Validating video file before audio muxing...")
@@ -948,8 +954,16 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
             logging.info(
                 f"[DirectEncode] Muxing audio: {channels}ch @ {sample_rate}Hz, "
-                f"duration {audio_duration:.2f}s"
+                f"duration {audio_duration:.2f}s, codec: {audio_codec}"
             )
+
+            # Select audio encoding arguments based on codec
+            if audio_codec == "flac":
+                audio_args = ['-c:a', 'flac', '-compression_level', '8']
+            elif audio_codec == "aac-320k":
+                audio_args = ['-c:a', 'aac', '-b:a', '320k', '-q:a', '2']
+            else:  # aac-192k
+                audio_args = ['-c:a', 'aac', '-b:a', '192k']
 
             # FFmpeg mux command
             ffmpeg_cmd = [
@@ -960,8 +974,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 '-f', 'f32le',
                 '-i', 'pipe:0',
                 '-c:v', 'copy',
-                '-c:a', 'aac',
-                '-b:a', '192k',
+            ] + audio_args + [
                 '-shortest',
                 str(output_path)
             ]
@@ -989,7 +1002,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 stderr_text = stderr.decode('utf-8', errors='ignore')
                 raise RuntimeError(f"Audio muxing failed (exit {proc.returncode}):\n{stderr_text}")
 
-            logging.info("[DirectEncode] Audio muxing complete")
+            logging.info(f"[DirectEncode] Audio muxing complete ({audio_codec})")
 
         except subprocess.TimeoutExpired as e:
             logging.error(f"[DirectEncode] Timeout during audio muxing: {e}")
