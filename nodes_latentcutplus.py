@@ -17,10 +17,6 @@ import folder_paths
 
 
 
-# ============================================================================
-# ANYTYPE CLASS (for universal debug node)
-# ============================================================================
-
 class AnyType(str):
     """Special class for representing any type - always returns True on type comparison"""
     def __eq__(self, _) -> bool:
@@ -31,10 +27,6 @@ class AnyType(str):
 
 any_type = AnyType("*")
 
-
-# ============================================================================
-# LATENT CUT PLUS (old API)
-# ============================================================================
 class LatentCutPlus:
     """Slice latent tensor along a dimension (t/x/y) with smart index/amount handling."""
     
@@ -224,9 +216,6 @@ class LTXVEmptyLatentAudioDebug:
         return ({"samples": latent},)
 
 
-# ============================================================================
-# LATENT DEBUG INFO (old API)
-# ============================================================================
 
 class LatentDebugInfo:
     """Debug node for inspecting latent tensor with detailed statistics."""
@@ -292,9 +281,6 @@ class LatentDebugInfo:
         return (samples,)
 
 
-# ============================================================================
-# DEBUG ANY (old API)
-# ============================================================================
 
 class DebugAny:
     """Universal debug node that accepts ANY type using AnyType class."""
