@@ -744,7 +744,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             output_width, output_height, fps, crf, preset, pix_fmt, str(output_path)
         )
 
-        logging.info(f"[DirectEncode] Starting ffmpeg: {' '.join(ffmpeg_cmd[:10])}...")
+        logging.info(f"[DirectEncode] Starting ffmpeg: {' '.join(ffmpeg_cmd)}...")
 
         try:
             ffmpeg_process = subprocess.Popen(
