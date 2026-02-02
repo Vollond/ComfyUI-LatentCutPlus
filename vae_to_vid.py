@@ -369,7 +369,7 @@ class VideoCombine_LTXV:
     def _get_counter(self, folder, filename):
         """Get next file counter"""
         max_counter = 0
-        matcher = re.compile(f"{re.escape(filename)}_(\d+)\D*\..+", re.IGNORECASE)
+        matcher = re.compile(rf"{re.escape(filename)}_(\d+)\D*\..+", re.IGNORECASE)
         try:
             for f in os.listdir(folder):
                 m = matcher.fullmatch(f)
