@@ -2,11 +2,7 @@ import logging
 import gc
 import torch
 
-from .nodes_registry import comfy_node
 
-@comfy_node(
-    name="LTXVTiledVAEDecode FIXED",
-)
 class LTXVTiledVAEDecode:
     @classmethod
     def INPUT_TYPES(s):
@@ -204,9 +200,6 @@ def calculate_temporal_output_boundaries(
     return out_t_start, out_t_end
 
 
-@comfy_node(
-    name="LTXVSpatioTemporalTiledVAEDecode_MemOptimized_v2",
-)
 class LTXVSpatioTemporalTiledVAEDecode_MemOptimized_v2(LTXVTiledVAEDecode):
     """
     ULTRA-OPTIMIZED version with:
@@ -848,6 +841,8 @@ NODE_CLASS_MAPPINGS = {
     "LTXVEmptyLatentAudioDebug": LTXVEmptyLatentAudioDebug,
     "LatentDebugInfo": LatentDebugInfo,
     "DebugAny": DebugAny,
+    "LTXVTiledVAEDecode" : LTXVTiledVAEDecode,
+    "LTXVSpatioTemporalTiledVAEDecode_MemOptimized_v2" : LTXVSpatioTemporalTiledVAEDecode_MemOptimized_v2,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -855,4 +850,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXVEmptyLatentAudioDebug": "🔊 LTXV Empty Latent Audio (Debug)",
     "LatentDebugInfo": "📊 Latent Debug Info",
     "DebugAny": "🔍 Debug Any",
+    "LTXVSpatioTemporalTiledVAEDecode_MemOptimized_v2": "LTXVSpatioTemporalTiledVAEDecode_MemOptimized_v2",
+    "LTXVTiledVAEDecode":"LTXVTiledVAEDecode 2"
 }
