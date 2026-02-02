@@ -1048,11 +1048,6 @@ class DebugAny:
 # NODE REGISTRATION
 # ============================================================================
 
-NODE_CLASS_MAPPINGS2 = {
-}
-
-NODE_DISPLAY_NAME_MAPPINGS2 = 
-}
 NODE_CLASS_MAPPINGS = {
     "LatentCutPlus": LatentCutPlus,
     "LTXVEmptyLatentAudioDebug": LTXVEmptyLatentAudioDebug,
