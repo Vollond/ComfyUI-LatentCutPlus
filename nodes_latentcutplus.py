@@ -364,7 +364,6 @@ class DebugAny:
         logging.info("=" * 80)
         
         return (value,)
-
 import logging
 import gc
 import torch
@@ -376,18 +375,36 @@ import time
 from pathlib import Path
 import folder_paths
 
-def compute_chunk_boundaries(chunk_start, temporal_tile_length, temporal_overlap, total_latent_frames):
+
+def compute_chunk_boundaries_FIXED(chunk_start, tile_length, overlap, total_frames):
+    """
+    FIXED temporal chunking algorithm
+
+    Args:
+        chunk_start: Starting frame index in latent space (for current output position)
+        tile_length: How many latent frames to decode per chunk
+        overlap: How many latent frames to overlap between chunks
+        total_frames: Total latent frames
+
+    Returns:
+        latent_start: Where to start in latent tensor
+        latent_end: Where to end in latent tensor
+        frames_to_drop: How many LATENT frames to drop after decode (not decoded frames!)
+    """
     if chunk_start == 0:
-        chunk_end = min(chunk_start + temporal_tile_length, total_latent_frames)
-        overlap_start = chunk_start
+        # First chunk: no overlap needed
+        latent_start = 0
+        latent_end = min(tile_length, total_frames)
+        frames_to_drop = 0
     else:
-        overlap_start = max(1, chunk_start - temporal_overlap - 1)
-        extra_frames = chunk_start - overlap_start
-        chunk_end = min(chunk_start + temporal_tile_length - extra_frames, total_latent_frames)
-    return overlap_start, chunk_end
+        # Subsequent chunks: include overlap for smooth transition
+        latent_start = max(0, chunk_start - overlap)
+        latent_end = min(chunk_start - overlap + tile_length, total_frames)
+        frames_to_drop = overlap
+
+    return latent_start, latent_end, frames_to_drop
 
 
-# Extension mapping for file names
 EXTENSION_MAP = {
     "h264-mp4": "mp4",
     "h265-mp4": "mp4",
@@ -405,13 +422,13 @@ def check_disk_space(output_path, estimated_size_gb):
         stat = shutil.disk_usage(output_dir)
         free_gb = stat.free / (1024**3)
 
-        if free_gb < estimated_size_gb * 1.2:  # 20% buffer
+        if free_gb < estimated_size_gb * 1.2:
             raise RuntimeError(
                 f"Insufficient disk space! Need ~{estimated_size_gb:.1f} GB, "
                 f"only {free_gb:.1f} GB available in {output_dir}"
             )
 
-        logging.info(f"[DirectEncode] Disk space check: {free_gb:.1f} GB free")
+        logging.info(f"[DirectEncode] Disk space: {free_gb:.1f} GB free")
         return free_gb
     except Exception as e:
         logging.warning(f"[DirectEncode] Could not check disk space: {e}")
@@ -419,7 +436,7 @@ def check_disk_space(output_path, estimated_size_gb):
 
 
 class LTXVTiledVAEDecode:
-    """Base spatial tiled decoder (same as before)"""
+    """Base spatial tiled decoder"""
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -515,14 +532,13 @@ class LTXVTiledVAEDecode:
 
 class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
     """
-    FIXED VERSION with proper error handling
+    FIXED VERSION - Proper temporal chunking
 
-    Fixes:
-    - Correct file extension mapping (h265-mp4 → .mp4)
-    - Early FFmpeg health check
-    - Better BrokenPipeError handling
-    - Disk space verification
-    - Detailed error logging
+    Key fixes:
+    1. Simplified chunk boundary computation
+    2. Correct frame dropping (accounting for time_scale_factor)
+    3. Frame count verification
+    4. Detailed logging for debugging
     """
 
     @classmethod
@@ -578,7 +594,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         audio=None,
     ):
         if temporal_tile_length < temporal_overlap + 1:
-            raise ValueError("Temporal tile length must be greater than temporal overlap + 1")
+            raise ValueError("temporal_tile_length must be > temporal_overlap + 1")
 
         # Preprocessing
         samples = latents["samples"]
@@ -591,32 +607,35 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         batch, channels, frames, height, width = samples.shape
         time_scale_factor, width_scale_factor, height_scale_factor = vae.downscale_index_formula
 
-        image_frames = 1 + (frames - 1) * time_scale_factor
+        # Calculate expected output frames
+        if original_frames is not None:
+            expected_output_frames = 1 + (original_frames - 1) * time_scale_factor
+        else:
+            expected_output_frames = 1 + (frames - 1) * time_scale_factor
+
         output_height = height * height_scale_factor
         output_width = width * width_scale_factor
 
-        # Estimate output size
-        bytes_per_pixel = 4 if pix_fmt in ['yuv444p', 'rgb24'] else (2.5 if pix_fmt == 'yuv420p10le' else 1.5)
-        estimated_size_gb = (image_frames * output_height * output_width * bytes_per_pixel * 0.1) / (1024**3)  # ~10% of raw for CRF 20-25
+        logging.info(f"[DirectEncode] Input latent: {frames} frames → Expected output: {expected_output_frames} frames")
+        logging.info(f"[DirectEncode] time_scale_factor: {time_scale_factor}")
 
-        logging.info(f"[DirectEncode] Estimated output: ~{estimated_size_gb:.2f} GB")
-
-        # Setup output path with CORRECT extension
+        # Setup output path
         if not output_path:
             output_dir = Path(folder_paths.get_output_directory())
-            # Use proper file extension
             file_ext = EXTENSION_MAP.get(pix_fmt, "mp4")
             output_path = str(output_dir / f"ltxv_output_{os.getpid()}.{file_ext}")
-        else:
-            output_path = str(Path(output_path))
 
         output_path = Path(output_path)
         output_path.parent.mkdir(exist_ok=True, parents=True)
 
-        # Check disk space
+        # Estimate size
+        bytes_per_pixel = 4 if pix_fmt == 'yuv444p' else (2.5 if pix_fmt == 'yuv420p10le' else 1.5)
+        estimated_size_gb = (expected_output_frames * output_height * output_width * bytes_per_pixel * 0.1) / (1024**3)
+
+        logging.info(f"[DirectEncode] Estimated output: ~{estimated_size_gb:.2f} GB")
         check_disk_space(output_path, estimated_size_gb)
 
-        # If audio present, encode to temp file first
+        # Audio handling
         if audio is not None:
             temp_video = output_path.with_suffix('.temp.mp4')
             final_output = output_path
@@ -627,15 +646,6 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
         logging.info(f"[DirectEncode] Output: {final_output}")
         logging.info(f"[DirectEncode] Resolution: {output_width}x{output_height}, FPS: {fps}")
-        logging.info(f"[DirectEncode] Quality: CRF {crf}, Preset: {preset}, Pix: {pix_fmt}")
-
-        target_device = samples.device if working_device == "auto" else working_device
-        if working_dtype == "auto":
-            target_dtype = samples.dtype
-        elif working_dtype == "float16":
-            target_dtype = torch.float16
-        else:
-            target_dtype = torch.float32
 
         # Encode video
         try:
@@ -644,35 +654,34 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 time_scale_factor, fps, crf, preset, pix_fmt,
                 spatial_tiles, spatial_overlap, temporal_tile_length, temporal_overlap,
                 decode_device, working_device, working_dtype, aggressive_cleanup,
-                last_frame_fix, original_frames, target_device, target_dtype
+                expected_output_frames
             )
         except Exception as e:
             logging.error(f"[DirectEncode] Encoding failed: {e}")
-            # Clean up temp file if exists
             if audio is not None and temp_video.exists():
                 temp_video.unlink()
             raise
 
-        # Mux audio if present
+        # Verify frame count
+        if abs(total_encoded_frames - expected_output_frames) > 1:
+            logging.warning(
+                f"[DirectEncode] ⚠️  Frame count mismatch! "
+                f"Expected {expected_output_frames}, got {total_encoded_frames}"
+            )
+
+        # Mux audio
         if audio is not None:
             try:
                 self._mux_audio(temp_video, audio, final_output, fps, total_encoded_frames)
-                # Clean up temp video
                 temp_video.unlink()
-                logging.info(f"[DirectEncode] Cleaned up temp video")
             except Exception as e:
                 logging.error(f"[DirectEncode] Audio muxing failed: {e}")
-                # At least copy video without audio
                 if temp_video.exists():
                     shutil.copy(temp_video, final_output)
                     temp_video.unlink()
-                    logging.warning("[DirectEncode] Saved video without audio")
 
         file_size_mb = final_output.stat().st_size / (1024**2)
-        logging.info(f"[DirectEncode] ✅ Complete!")
-        logging.info(f"[DirectEncode] Frames: {total_encoded_frames}")
-        logging.info(f"[DirectEncode] Size: {file_size_mb:.2f} MB")
-        logging.info(f"[DirectEncode] Path: {final_output}")
+        logging.info(f"[DirectEncode] ✅ Complete! {total_encoded_frames} frames, {file_size_mb:.2f} MB")
 
         return (str(final_output),)
 
@@ -681,19 +690,17 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         time_scale_factor, fps, crf, preset, pix_fmt,
         spatial_tiles, spatial_overlap, temporal_tile_length, temporal_overlap,
         decode_device, working_device, working_dtype, aggressive_cleanup,
-        last_frame_fix, original_frames, target_device, target_dtype
+        expected_output_frames
     ):
-        """Encode video stream with robust error handling"""
+        """Encode video with FIXED temporal chunking"""
 
-        # Generate ffmpeg command
+        # Start ffmpeg
         ffmpeg_cmd = self._get_ffmpeg_command(
             output_width, output_height, fps, crf, preset, pix_fmt, str(output_path)
         )
 
-        logging.info(f"[DirectEncode] FFmpeg command:")
-        logging.info(f"  {' '.join(ffmpeg_cmd[:15])}...")
+        logging.info(f"[DirectEncode] Starting ffmpeg...")
 
-        # Start ffmpeg process
         try:
             ffmpeg_process = subprocess.Popen(
                 ffmpeg_cmd,
@@ -703,16 +710,13 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 bufsize=10**8
             )
         except FileNotFoundError:
-            raise RuntimeError("ffmpeg not found! Please install: sudo apt install ffmpeg")
+            raise RuntimeError("ffmpeg not found! Install: sudo apt install ffmpeg")
 
-        # Wait a bit and check if ffmpeg started successfully
+        # Check ffmpeg started
         time.sleep(0.5)
         if ffmpeg_process.poll() is not None:
-            # FFmpeg already exited - something is wrong
             stderr = ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
             raise RuntimeError(f"FFmpeg failed to start:\n{stderr}")
-
-        logging.info("[DirectEncode] FFmpeg started successfully")
 
         # VAE device management
         vae_original_device = None
@@ -724,7 +728,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-        # Decode and stream to ffmpeg
+        # Chunked decoding
         batch, channels, total_latent_frames, height, width = samples.shape
         chunk_start = 0
         chunk_idx = 0
@@ -732,14 +736,21 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
         try:
             while chunk_start < total_latent_frames:
-                overlap_start, chunk_end = compute_chunk_boundaries(
+                # FIXED chunking algorithm
+                latent_start, latent_end, frames_to_drop = compute_chunk_boundaries_FIXED(
                     chunk_start, temporal_tile_length, temporal_overlap, total_latent_frames
                 )
 
-                logging.info(f"[DirectEncode] Chunk {chunk_idx}: latent {overlap_start}:{chunk_end}")
+                latent_frames = latent_end - latent_start
 
-                # Decode chunk
-                tile = samples[:, :, overlap_start:chunk_end]
+                logging.info(
+                    f"[DirectEncode] Chunk {chunk_idx}: "
+                    f"latent[{latent_start}:{latent_end}] ({latent_frames} frames), "
+                    f"will drop {frames_to_drop} latent frames"
+                )
+
+                # Extract and decode chunk
+                tile = samples[:, :, latent_start:latent_end]
                 if decode_device == "cpu":
                     tile = tile.cpu()
 
@@ -757,54 +768,63 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 )[0]
 
                 decoded_tile = decoded_tile.view(batch, -1, output_height, output_width, 3)
+                decoded_frames = decoded_tile.shape[1]
 
-                # Drop overlapping frame
-                if chunk_start > 0 and decoded_tile.shape[1] > 1:
-                    decoded_tile = decoded_tile[:, 1:]
+                logging.info(f"[DirectEncode]   Decoded: {decoded_frames} frames")
+
+                # Drop overlap frames (convert latent frames to decoded frames)
+                if frames_to_drop > 0:
+                    # IMPORTANT: frames_to_drop is in LATENT space
+                    # Need to convert to DECODED space
+                    decoded_frames_to_drop = frames_to_drop * time_scale_factor
+
+                    if decoded_frames_to_drop >= decoded_frames:
+                        logging.error(
+                            f"[DirectEncode] ❌ Trying to drop {decoded_frames_to_drop} frames "
+                            f"but only have {decoded_frames}!"
+                        )
+                        decoded_frames_to_drop = max(0, decoded_frames - 1)
+
+                    decoded_tile = decoded_tile[:, decoded_frames_to_drop:]
+                    logging.info(f"[DirectEncode]   Dropped: {decoded_frames_to_drop} frames → {decoded_tile.shape[1]} remain")
 
                 # Convert to uint8 RGB
                 decoded_tile = decoded_tile.cpu()
                 decoded_np = (decoded_tile[0].numpy() * 255).clip(0, 255).astype(np.uint8)
 
-                chunk_frames = decoded_np.shape[0]
+                chunk_output_frames = decoded_np.shape[0]
 
-                # Write frames to ffmpeg stdin with error handling
-                for frame_idx in range(chunk_frames):
+                # Write frames
+                for frame_idx in range(chunk_output_frames):
                     frame = decoded_np[frame_idx]
                     try:
                         ffmpeg_process.stdin.write(frame.tobytes())
                         ffmpeg_process.stdin.flush()
                         total_encoded_frames += 1
                     except BrokenPipeError:
-                        # FFmpeg closed pipe - get error
                         stderr = ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
-                        logging.error(f"[DirectEncode] ❌ FFmpeg pipe broken at frame {total_encoded_frames}!")
-                        logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr}")
-                        raise RuntimeError(f"FFmpeg encoding failed after {total_encoded_frames} frames:\n{stderr}")
-                    except Exception as e:
-                        logging.error(f"[DirectEncode] Error writing frame {total_encoded_frames}: {e}")
-                        raise
+                        logging.error(f"[DirectEncode] ❌ Pipe broken at frame {total_encoded_frames}")
+                        logging.error(f"FFmpeg stderr:\n{stderr}")
+                        raise RuntimeError(f"FFmpeg failed after {total_encoded_frames} frames:\n{stderr}")
 
-                logging.info(f"[DirectEncode] Wrote {chunk_frames} frames (total: {total_encoded_frames})")
+                logging.info(f"[DirectEncode]   Wrote: {chunk_output_frames} frames (total: {total_encoded_frames})")
 
-                # Aggressive cleanup
+                # Cleanup
                 if aggressive_cleanup:
                     del tile, tile_latents, decoded_tile, decoded_np
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                     gc.collect()
 
-                chunk_start = chunk_end
+                chunk_start = latent_end
                 chunk_idx += 1
 
         except Exception as e:
-            # Clean up on error
             try:
                 ffmpeg_process.stdin.close()
             except:
                 pass
             ffmpeg_process.terminate()
-            ffmpeg_process.wait()
             raise
 
         finally:
@@ -815,24 +835,21 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                 if aggressive_cleanup and torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-        # Close ffmpeg stdin and wait for completion
+        # Finalize ffmpeg
         try:
             ffmpeg_process.stdin.close()
         except:
             pass
 
-        logging.info("[DirectEncode] Waiting for FFmpeg to finish...")
+        logging.info("[DirectEncode] Waiting for FFmpeg...")
 
         stderr_output = ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
         return_code = ffmpeg_process.wait()
 
         if return_code != 0:
             logging.error(f"[DirectEncode] FFmpeg exited with code {return_code}")
-            logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr_output}")
-            raise RuntimeError(f"FFmpeg encoding failed (exit code {return_code}):\n{stderr_output}")
-
-        if stderr_output:
-            logging.info(f"[DirectEncode] FFmpeg output:\n{stderr_output[-500:]}")  # Last 500 chars
+            logging.error(f"FFmpeg stderr:\n{stderr_output}")
+            raise RuntimeError(f"FFmpeg failed (exit {return_code}):\n{stderr_output}")
 
         return total_encoded_frames
 
@@ -843,9 +860,7 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             sample_rate = audio['sample_rate']
             batch, channels, audio_samples = waveform.shape
 
-            video_duration = total_frames / fps
-
-            logging.info(f"[DirectEncode] Muxing audio: {channels}ch @ {sample_rate}Hz, duration {video_duration:.2f}s")
+            logging.info(f"[DirectEncode] Muxing audio: {channels}ch @ {sample_rate}Hz")
 
             ffmpeg_cmd = [
                 'ffmpeg', '-y',
@@ -878,12 +893,12 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             return_code = proc.wait()
 
             if return_code != 0:
-                raise RuntimeError(f"Audio muxing failed (exit code {return_code}):\n{stderr}")
+                raise RuntimeError(f"Audio muxing failed:\n{stderr}")
 
             logging.info("[DirectEncode] Audio muxing complete")
 
         except Exception as e:
-            logging.error(f"[DirectEncode] Audio muxing error: {e}")
+            logging.error(f"[DirectEncode] Audio error: {e}")
             raise
 
     def _get_ffmpeg_command(self, width, height, fps, crf, preset, pix_fmt, output):
@@ -915,15 +930,6 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         return cmd
 
 
-NODE_CLASS_MAPPINGS = {
-    "LTXVTiledVAEDecode": LTXVTiledVAEDecode,
-    "LTXVSpatioTemporalTiledVAEDecode_DirectEncode": LTXVSpatioTemporalTiledVAEDecode_DirectEncode,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "LTXVTiledVAEDecode": "🔲 LTXV Tiled VAE Decode",
-    "LTXVSpatioTemporalTiledVAEDecode_DirectEncode": "🎬 LTXV Direct MP4 (FIXED)",
-}
 # ============================================================================
 # NODE REGISTRATION
 # ============================================================================
