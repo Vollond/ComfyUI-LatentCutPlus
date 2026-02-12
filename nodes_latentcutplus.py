@@ -722,11 +722,11 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
         return (str(final_output),)
 
     def _encode_video_stream(
-        self, samples, vae, output_path, output_height, output_width,
-        time_scale_factor, fps, codec, crf, preset, pix_fmt,
-        spatial_tiles, spatial_overlap, temporal_tile_length, temporal_overlap,
-        decode_device, working_device, working_dtype, aggressive_cleanup,
-        expected_output_frames
+            self, samples, vae, output_path, output_height, output_width,
+            time_scale_factor, fps, codec, crf, preset, pix_fmt,
+            spatial_tiles, spatial_overlap, temporal_tile_length, temporal_overlap,
+            decode_device, working_device, working_dtype, aggressive_cleanup,
+            expected_output_frames
     ):
         """Encode video stream with proper temporal chunking and memory-efficient frame processing"""
 
@@ -737,22 +737,28 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
 
         logging.info(f"[DirectEncode] Starting ffmpeg: {' '.join(ffmpeg_cmd)}...")
 
+        # FIX 1: Используем временный файл для логов FFmpeg, чтобы избежать Deadlock буфера
+        log_file_path = output_path.with_suffix('.ffmpeg.log')
+        log_file = open(log_file_path, 'w')
+
         try:
             ffmpeg_process = subprocess.Popen(
                 ffmpeg_cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=10**8
+                stdout=subprocess.DEVNULL,  # Нам не нужен stdout
+                stderr=log_file,  # Пишем ошибки в файл, чтобы буфер не забился
+                bufsize=10 ** 8
             )
         except FileNotFoundError:
+            log_file.close()
             raise RuntimeError("ffmpeg not found! Install: sudo apt install ffmpeg")
 
         # Verify ffmpeg started successfully
         time.sleep(0.5)
         if ffmpeg_process.poll() is not None:
-            _, stderr = ffmpeg_process.communicate()
-            stderr_text = stderr.decode('utf-8', errors='ignore')
+            log_file.close()
+            with open(log_file_path, 'r') as f:
+                stderr_text = f.read()
             raise RuntimeError(f"FFmpeg failed to start:\n{stderr_text}")
 
         logging.info("[DirectEncode] FFmpeg started successfully")
@@ -806,6 +812,8 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                     working_dtype=working_dtype,
                 )[0]
 
+                # decoded_tile shape: [batch*frames, height, width, 3] or similar depending on decode output
+                # Ensure correct shape: [batch, frames, height, width, 3]
                 decoded_tile = decoded_tile.view(batch, -1, output_height, output_width, 3)
                 decoded_frames = decoded_tile.shape[1]
 
@@ -830,34 +838,38 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
                         f"{decoded_tile.shape[1]} remain"
                     )
 
-                # Move to CPU and get frame count
-                decoded_tile = decoded_tile.cpu()
+                # FIX 2: НЕ переносим весь тензор на CPU сразу (.cpu() удалено)
+                # Мы будем брать по одному кадру
                 chunk_output_frames = decoded_tile.shape[1]
 
                 # Write frames to ffmpeg ONE AT A TIME (memory efficient)
                 for frame_idx in range(chunk_output_frames):
-                    # Convert single frame to uint8
-                    frame = decoded_tile[0, frame_idx].numpy()
+                    # Check if FFmpeg is still alive
+                    if ffmpeg_process.poll() is not None:
+                        raise BrokenPipeError("FFmpeg process died unexpectedly")
+
+                    # FIX 2 (продолжение): Берем срез, переносим на CPU, конвертируем
+                    # Это держит потребление RAM низким (только 1 кадр за раз)
+                    frame_tensor = decoded_tile[0, frame_idx].cpu()
+                    frame = frame_tensor.numpy()
+
+                    # Fast conversion
                     frame_uint8 = (frame * 255).clip(0, 255).astype(np.uint8)
-                    
+
                     try:
                         ffmpeg_process.stdin.write(frame_uint8.tobytes())
-                        ffmpeg_process.stdin.flush()
+                        # flush не обязателен каждый кадр и может замедлять, но оставим для надежности
+                        # ffmpeg_process.stdin.flush()
                         total_encoded_frames += 1
                     except BrokenPipeError:
-                        _, stderr = ffmpeg_process.communicate()
-                        stderr_text = stderr.decode('utf-8', errors='ignore')
                         logging.error(f"[DirectEncode] ❌ FFmpeg pipe broken at frame {total_encoded_frames}")
-                        logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr_text}")
-                        raise RuntimeError(
-                            f"FFmpeg encoding failed after {total_encoded_frames} frames:\n{stderr_text}"
-                        )
+                        raise RuntimeError("FFmpeg pipe broken")
                     except Exception as e:
                         logging.error(f"[DirectEncode] Error writing frame {total_encoded_frames}: {e}")
                         raise
-                    
-                    # Free memory immediately after each frame
-                    del frame, frame_uint8
+
+                    # Free memory immediately
+                    del frame, frame_tensor, frame_uint8
 
                 logging.info(f"[DirectEncode]   Wrote: {chunk_output_frames} frames (total: {total_encoded_frames})")
 
@@ -877,6 +889,11 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             except:
                 pass
             ffmpeg_process.terminate()
+            # Читаем лог файл при ошибке
+            log_file.close()
+            if os.path.exists(log_file_path):
+                with open(log_file_path, 'r') as f:
+                    logging.error(f"[DirectEncode] FFmpeg Log:\n{f.read()}")
             raise
 
         finally:
@@ -894,19 +911,23 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             pass
 
         logging.info("[DirectEncode] Waiting for FFmpeg to finish...")
-
-        stdout, stderr = ffmpeg_process.communicate()
-        stderr_output = stderr.decode('utf-8', errors='ignore')
+        ffmpeg_process.wait()
+        log_file.close()
 
         if ffmpeg_process.returncode != 0:
+            if os.path.exists(log_file_path):
+                with open(log_file_path, 'r') as f:
+                    stderr_output = f.read()
+            else:
+                stderr_output = "No log file generated."
+
             logging.error(f"[DirectEncode] FFmpeg exited with code {ffmpeg_process.returncode}")
             logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr_output}")
-            raise RuntimeError(f"FFmpeg encoding failed (exit code {ffmpeg_process.returncode}):\n{stderr_output}")
+            raise RuntimeError(f"FFmpeg encoding failed (exit code {ffmpeg_process.returncode})")
 
-        # Show last part of ffmpeg output for info
-        if stderr_output:
-            last_lines = '\n'.join(stderr_output.splitlines()[-5:])
-            logging.info(f"[DirectEncode] FFmpeg output (last 5 lines):\n{last_lines}")
+        # Удаляем лог файл если все прошло успешно
+        if os.path.exists(log_file_path):
+            os.remove(log_file_path)
 
         return total_encoded_frames
 
