@@ -925,10 +925,6 @@ class LTXVSpatioTemporalTiledVAEDecode_DirectEncode(LTXVTiledVAEDecode):
             logging.error(f"[DirectEncode] FFmpeg stderr:\n{stderr_output}")
             raise RuntimeError(f"FFmpeg encoding failed (exit code {ffmpeg_process.returncode})")
 
-        # Удаляем лог файл если все прошло успешно
-        if os.path.exists(log_file_path):
-            os.remove(log_file_path)
-
         return total_encoded_frames
 
     def _mux_audio(self, video_path, audio, output_path, fps, total_frames, audio_codec="flac"):
